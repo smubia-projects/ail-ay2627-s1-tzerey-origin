@@ -1,5 +1,5 @@
 # Files that must never be uploaded to Vercel when deploying with the CLI (git-based deploys use .gitignore).
-# Keep tools/ and server/: the build script and the demo API functions need them.
+# Keep tools/: the build script needs it. The API runs on Cloud Run, so server/ is not needed on Vercel.
 private/
 .env
 .env.*

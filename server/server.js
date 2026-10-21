@@ -101,19 +101,6 @@ function parseSubject(payload) {
 }
 
 async function readBody(req, limit = 20000) {
-  /* Some hosts (Vercel's Node runtime, for one) read and parse the body before the handler runs and expose it as req.body.
-   * Plain Node leaves req.body undefined, so the stream is read below. */
-  let pre;
-  try {
-    pre = req.body;
-  } catch {
-    throw Object.assign(new Error("Invalid JSON"), { status: 400 });
-  }
-  if (pre !== undefined && pre !== null) {
-    const text = Buffer.isBuffer(pre) ? pre.toString("utf8") : typeof pre === "string" ? pre : JSON.stringify(pre);
-    if (Buffer.byteLength(text) > limit) throw Object.assign(new Error("Payload too large"), { status: 413 });
-    return text;
-  }
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -249,7 +236,7 @@ function serveStatic(req, res, pathname) {
   });
 }
 
-/* Routes one request. Used by the local server below and by the hosted demo's api/ functions. */
+/* Routes one request. */
 function route(req, res) {
   const { pathname } = new URL(req.url, "http://localhost");
   if (pathname === "/api/health" && req.method === "GET") return sendJson(res, 200, health());
