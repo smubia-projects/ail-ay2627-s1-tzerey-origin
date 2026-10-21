@@ -67,24 +67,35 @@ test("after data arrives the loading animation plays before the results (state l
   assert.match(app, /function clearData\(\)[\s\S]*?showView\("empty"\)/, "Load different data returns to the prompt");
 });
 
-test("server: serves the sample pack, the template and the app scripts; refuses everything else", async () => {
+test("server: API-only, serves no frontend files", async () => {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
   try {
-    const sample = await get(port, "/templates/sample-data-pack.js");
-    assert.equal(sample.status, 200);
-    assert.match(sample.headers["content-type"], /javascript/);
-    assert.equal(sample.headers["cache-control"], "no-cache");
-    const pack = DataLoader.parsePack(sample.body);
-    assert.equal(pack.counts.valid, 14, "what the server sends is a valid data pack");
-    assert.equal((await get(port, "/templates/prospects-template.js")).status, 200);
-    assert.equal((await get(port, "/templates/company-profiles-template.js")).status, 200);
-    assert.equal((await get(port, "/data-upload.js")).status, 200);
-    assert.equal((await get(port, "/data-loader.js")).status, 200);
-    assert.equal((await get(port, "/app.html")).status, 200);
-    for (const forbidden of ["/prospects-data.js", "/private/real-data-pack.js", "/.env", "/server/server.js", "/tests/model.test.js", "/templates/../server/server.js", "/logs/outreach-audit.jsonl", "/__proto__", "/constructor"]) {
-      assert.equal((await get(port, forbidden)).status, 404, forbidden);
+    const health = await get(port, "/api/health");
+    assert.equal(health.status, 200);
+    assert.equal(JSON.parse(health.body).status, "ok");
+    for (const notApi of ["/", "/app.html", "/index.html", "/templates/sample-data-pack.js", "/app.js", "/.env", "/server/server.js", "/logs/outreach-audit.jsonl", "/__proto__"]) {
+      assert.equal((await get(port, notApi)).status, 404, notApi);
     }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("server: CORS allows only the configured frontend origins", async () => {
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  const request = (method, headers) => new Promise((resolve, reject) => {
+    http.request({ host: "127.0.0.1", port, path: "/api/email-draft", method, headers }, (res) => { res.resume(); res.on("end", () => resolve(res)); }).on("error", reject).end();
+  });
+  try {
+    const ok = await request("OPTIONS", { Origin: "http://localhost:5500", "Access-Control-Request-Method": "POST" });
+    assert.equal(ok.statusCode, 204);
+    assert.equal(ok.headers["access-control-allow-origin"], "http://localhost:5500");
+    assert.match(ok.headers["access-control-allow-headers"], /X-Requested-With/);
+    const evil = await request("OPTIONS", { Origin: "https://evil.example", "Access-Control-Request-Method": "POST" });
+    assert.equal(evil.statusCode, 403);
+    assert.equal(evil.headers["access-control-allow-origin"], undefined);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

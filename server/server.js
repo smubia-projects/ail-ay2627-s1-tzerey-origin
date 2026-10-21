@@ -1,17 +1,15 @@
 "use strict";
 
 /*
- * Local server for Origin.
- *   GET  /*                  static app files (whitelisted names only)
- *   GET  /api/health         which integrations are configured (booleans only, never keys)
+ * Origin API server (API-only: the static frontend is deployed separately on Vercel).
+ *   GET  /api/health         liveness plus which integrations are configured (booleans only, never keys)
  *   POST /api/outreach       streams the outreach research dossier as NDJSON
  *   POST /api/email-draft    drafts a first-touch email from a dossier
  * API keys are read from the environment / .env on the server and are never sent to the browser.
- * Binds to localhost by default. Run with `npm start`, or `npm run start:mock` for a keyless demo.
+ * Cross-origin calls are accepted only from the origins listed in CORS_ORIGINS.
+ * Run with `npm start`, or `npm run start:mock` for a keyless demo.
  */
 const http = require("http");
-const fs = require("fs");
-const path = require("path");
 const { llmConfig } = require("./llm");
 const { runOutreach, auditLog } = require("./outreach");
 const { runMock } = require("./mock");
@@ -20,39 +18,24 @@ const { firecrawlConfigured, usptoEnabled } = require("./tools");
 const { startRetentionJob } = require("./audit");
 
 const MOCK = process.argv.includes("--mock") || process.env.OUTREACH_MOCK === "1";
-const HOST = process.env.HOST || "127.0.0.1";
-const PORT = Number(process.env.PORT) || 8787;
-const ROOT = path.join(__dirname, "..");
+const HOST = process.env.HOST || "0.0.0.0";
+const PORT = Number(process.env.PORT) || 8080;
+/* Frontend origins allowed to call the API (comma-separated). Defaults to the local static dev server. */
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || "http://localhost:5500,http://127.0.0.1:5500")
+  .split(",")
+  .map((origin) => origin.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
 const MAX_CONCURRENT = 2;
 const RUN_TIMEOUT_MS = 240000;
 let active = 0;
 let activeDrafts = 0;
 
-/* Only these files can be served. Everything else (including .env, server code and logs) is a 404. */
-const PUBLIC_FILES = {
-  "index.html": "text/html; charset=utf-8",
-  "app.html": "text/html; charset=utf-8",
-  "styles.css": "text/css; charset=utf-8",
-  "landing.css": "text/css; charset=utf-8",
-  "app.js": "text/javascript; charset=utf-8",
-  "landing.js": "text/javascript; charset=utf-8",
-  "equity-model.js": "text/javascript; charset=utf-8",
-  "dossier.js": "text/javascript; charset=utf-8",
-  "dossier-pdf.js": "text/javascript; charset=utf-8",
-  "compose.js": "text/javascript; charset=utf-8",
-  "data-loader.js": "text/javascript; charset=utf-8",
-  "data-upload.js": "text/javascript; charset=utf-8",
-  "templates/prospects-template.js": "text/javascript; charset=utf-8",
-  "templates/company-profiles-template.js": "text/javascript; charset=utf-8",
-  "templates/sample-data-pack.js": "text/javascript; charset=utf-8",
-  "vendor/jspdf.umd.min.js": "text/javascript; charset=utf-8"
-};
-
+/* API responses are JSON or NDJSON only, so the policy forbids loading anything. */
 const SECURITY_HEADERS = {
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
   "X-Frame-Options": "DENY",
-  "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'"
 };
 
 function sendJson(res, status, body) {
@@ -63,7 +46,7 @@ function sendJson(res, status, body) {
 function health() {
   const llm = llmConfig();
   return {
-    ok: true,
+    status: "ok",
     mock: MOCK,
     tools: {
       language_model: llm ? llm.provider : null,
@@ -111,20 +94,33 @@ async function readBody(req, limit = 20000) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/* The request's Origin must be this same site. The scheme is ignored on purpose: behind HTTPS hosting the browser's Origin
- * is https://... while this process only sees the Host header. */
-function sameSite(origin, host) {
-  try {
-    return new URL(origin).host.toLowerCase() === String(host || "").toLowerCase();
-  } catch {
-    return false;
+const allowedOrigin = (origin) => CORS_ORIGINS.includes(String(origin || "").replace(/\/+$/, ""));
+
+/* Lets the configured frontend origins read API responses. Set before any response is written. */
+function applyCors(req, res) {
+  const origin = req.headers.origin;
+  if (origin && allowedOrigin(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
   }
 }
 
-/* Shared request guard for the POST APIs: same-origin only, and only from the app's own fetch calls. */
+/* CORS preflight for the POST APIs (they send Content-Type: application/json and X-Requested-With). */
+function handlePreflight(req, res) {
+  if (!allowedOrigin(req.headers.origin)) return sendJson(res, 403, { error: "Origin not allowed" });
+  res.writeHead(204, {
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, X-Requested-With",
+    "Access-Control-Max-Age": "600",
+    ...SECURITY_HEADERS
+  });
+  return res.end();
+}
+
+/* Shared request guard for the POST APIs: only from an allowed frontend origin, and only from the app's own fetch calls. */
 function guardApiRequest(req, res) {
   const origin = req.headers.origin;
-  if (origin && !sameSite(origin, req.headers.host)) {
+  if (origin && !allowedOrigin(origin)) {
     sendJson(res, 403, { error: "Cross-origin requests are not allowed" });
     return false;
   }
@@ -219,31 +215,17 @@ async function handleEmailDraft(req, res) {
   }
 }
 
-function serveStatic(req, res, pathname) {
-  const name = pathname === "/" ? "index.html" : pathname.replace(/^\//, "");
-  const type = Object.hasOwn(PUBLIC_FILES, name) ? PUBLIC_FILES[name] : null;
-  if (!type) {
-    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", ...SECURITY_HEADERS });
-    return res.end("Not found");
-  }
-  fs.readFile(path.join(ROOT, name), (error, data) => {
-    if (error) {
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", ...SECURITY_HEADERS });
-      return res.end("Not found");
-    }
-    res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-cache", ...SECURITY_HEADERS });
-    res.end(data);
-  });
-}
-
 /* Routes one request. */
 function route(req, res) {
   const { pathname } = new URL(req.url, "http://localhost");
+  applyCors(req, res);
+  if (!pathname.startsWith("/api/")) return sendJson(res, 404, { error: "Not found" });
+  if (req.method === "OPTIONS") return handlePreflight(req, res);
   if (pathname === "/api/health" && req.method === "GET") return sendJson(res, 200, health());
   if (pathname === "/api/outreach" && req.method === "POST") return handleOutreach(req, res);
   if (pathname === "/api/email-draft" && req.method === "POST") return handleEmailDraft(req, res);
-  if (req.method === "GET" || req.method === "HEAD") return serveStatic(req, res, pathname);
-  return sendJson(res, 405, { error: "Method not allowed" });
+  if (["/api/health", "/api/outreach", "/api/email-draft"].includes(pathname)) return sendJson(res, 405, { error: "Method not allowed" });
+  return sendJson(res, 404, { error: "Not found" });
 }
 
 const server = http.createServer(route);
@@ -255,7 +237,7 @@ if (require.main === module) {
   });
   server.listen(PORT, HOST, () => {
     const h = health();
-    console.log(`Origin is running at http://${HOST}:${PORT}/app.html${MOCK ? "  (DEMO MODE: synthetic data)" : ""}`);
+    console.log(`Origin API listening on http://${HOST}:${PORT}${MOCK ? "  (DEMO MODE: synthetic data)" : ""}. Allowed origins: ${CORS_ORIGINS.join(", ") || "(none)"}`);
     console.log(`Tools: ${Object.entries(h.tools).map(([k, v]) => `${k}=${v ? "on" : "off"}`).join(", ")}`);
     const retention = startRetentionJob();
     console.log(retention.days
@@ -264,4 +246,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { server, route, health, parseSubject, readBody, PUBLIC_FILES, SECURITY_HEADERS };
+module.exports = { server, route, health, parseSubject, readBody, SECURITY_HEADERS, CORS_ORIGINS };

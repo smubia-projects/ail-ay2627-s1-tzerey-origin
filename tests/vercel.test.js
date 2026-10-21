@@ -14,7 +14,8 @@ const ROOT = path.join(__dirname, "..");
 const read = (...p) => fs.readFileSync(path.join(ROOT, ...p), "utf8");
 const sha = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
-const { PUBLIC_FILES, SECURITY_HEADERS, readBody } = require("../server/server");
+const { readBody } = require("../server/server");
+const { PUBLIC_FILES } = require("../tools/build-demo");
 
 /* ------------------------------------------------------------------ configuration files */
 test("vercel.json: builds the static site, has no serverless functions, and carries the security headers", () => {
@@ -23,7 +24,8 @@ test("vercel.json: builds the static site, has no serverless functions, and carr
   assert.equal(config.outputDirectory, "public");
   assert.equal(config.functions, undefined, "the API runs on Cloud Run, not as Vercel functions");
   const headers = Object.fromEntries(config.headers.find((h) => h.source === "/(.*)").headers.map((h) => [h.key, h.value]));
-  for (const [key, value] of Object.entries(SECURITY_HEADERS)) assert.equal(headers[key], value, `${key} matches the local server`);
+  assert.equal(headers["X-Content-Type-Options"], "nosniff");
+  assert.equal(headers["X-Frame-Options"], "DENY");
   assert.match(headers["Content-Security-Policy"], /script-src 'self'/);
 });
 
@@ -48,7 +50,7 @@ test("the build publishes exactly the whitelisted files and nothing else", () =>
       if (entry.isDirectory()) walk(full); else published.push(path.relative(out, full).split(path.sep).join("/"));
     }
   })(out);
-  assert.deepEqual(published.sort(), Object.keys(PUBLIC_FILES).sort());
+  assert.deepEqual(published.sort(), [...PUBLIC_FILES].sort());
   for (const name of published) assert.equal(sha(path.join(out, name)), sha(path.join(ROOT, name)), `${name} is an exact copy`);
   for (const secret of ["server", "tests", "tools", "private", ".env", "README.md", "logs", "package.json", "vercel.json"]) {
     assert.ok(!published.some((f) => f === secret || f.startsWith(`${secret}/`)), `${secret} is not published`);
