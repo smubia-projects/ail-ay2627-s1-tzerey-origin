@@ -27,6 +27,7 @@ test("vercel.json: builds the static site, has no serverless functions, and carr
   assert.equal(headers["X-Content-Type-Options"], "nosniff");
   assert.equal(headers["X-Frame-Options"], "DENY");
   assert.match(headers["Content-Security-Policy"], /script-src 'self'/);
+  assert.match(headers["Content-Security-Policy"], /connect-src 'self' https:\/\/\*\.run\.app;/, "the page may call the Cloud Run API");
 });
 
 test("ignore files keep private data, keys, logs and tests out of the upload and the repository", () => {
@@ -50,8 +51,9 @@ test("the build publishes exactly the whitelisted files and nothing else", () =>
       if (entry.isDirectory()) walk(full); else published.push(path.relative(out, full).split(path.sep).join("/"));
     }
   })(out);
-  assert.deepEqual(published.sort(), [...PUBLIC_FILES].sort());
-  for (const name of published) assert.equal(sha(path.join(out, name)), sha(path.join(ROOT, name)), `${name} is an exact copy`);
+  assert.deepEqual(published.sort(), [...PUBLIC_FILES, "config.js"].sort());
+  assert.match(fs.readFileSync(path.join(out, "config.js"), "utf8"), /window\.VITE_API_BASE = "http:\/\/localhost:8080";/);
+  for (const name of PUBLIC_FILES) assert.equal(sha(path.join(out, name)), sha(path.join(ROOT, name)), `${name} is an exact copy`);
   for (const secret of ["server", "tests", "tools", "private", ".env", "README.md", "logs", "package.json", "vercel.json"]) {
     assert.ok(!published.some((f) => f === secret || f.startsWith(`${secret}/`)), `${secret} is not published`);
   }
@@ -79,5 +81,6 @@ test("the page tells visitors when it is in demo mode, using the health endpoint
   const html = read("app.html");
   assert.match(html, /id="demoBanner"[^>]*\shidden/);
   assert.match(html, /synthetic placeholders and no live lookups are made/);
+  assert.ok(html.indexOf('src="config.js"') < html.indexOf('src="dossier.js"'), "config.js loads before the API callers");
   assert.match(read("app.js"), /health\?\.mock/);
 });

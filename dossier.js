@@ -1,5 +1,5 @@
 /*
- * Outreach dossier: streams progress from the local research agent (/api/outreach) and renders the result as one card.
+ * Outreach dossier: streams progress from the research API (/api/outreach, synthetic in the hosted demo) and renders the result as one card.
  * Everything that originates from the web is HTML-escaped and links are limited to http(s).
  */
 (() => {
@@ -16,11 +16,13 @@
     const safe = safeUrl(url);
     return safe ? `<a href="${esc(safe)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>` : `<span>${esc(label)}</span>`;
   };
+  /* API base URL injected at build time (config.js, from VITE_API_BASE). */
+  const API_BASE = String(window.VITE_API_BASE || "http://localhost:8080").replace(/\/+$/, "");
   const chip = (text, tone = "") => `<span class="d-chip${tone ? ` d-${tone}` : ""}">${esc(text)}</span>`;
 
   async function health() {
     try {
-      const res = await fetch("/api/health", { cache: "no-store" });
+      const res = await fetch(`${API_BASE}/api/health`, { cache: "no-store" });
       return res.ok ? await res.json() : null;
     } catch {
       return null;
@@ -28,7 +30,7 @@
   }
 
   async function run(subject, { signal, onEvent }) {
-    const res = await fetch("/api/outreach", {
+    const res = await fetch(`${API_BASE}/api/outreach`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Requested-With": "origin-app" },
       body: JSON.stringify(subject),
