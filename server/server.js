@@ -15,6 +15,7 @@ const http = require("http");
 const { llmConfig } = require("./llm");
 const { runMock } = require("./mock");
 const { draftEmail, mockDraft, assertCanContact, cleanEmployer } = require("./email");
+const { checkRateLimit } = require("./rateLimit");
 
 /* Research is always synthetic. This flag only switches email drafting to the keyless demo generator too. */
 const EMAIL_MOCK = process.argv.includes("--mock") || process.env.OUTREACH_MOCK === "1";
@@ -183,6 +184,11 @@ async function handleEmailDraft(req, res) {
   res.on("close", () => controller.abort());
   try {
     assertCanContact(dossier, acknowledged);
+    /* Counted only for requests that will reach the model (after validation and the compliance gate). */
+    if (!EMAIL_MOCK) {
+      const limited = await checkRateLimit(req, "email");
+      if (limited) return sendJson(res, limited.status, limited.body);
+    }
     const draft = EMAIL_MOCK ? mockDraft(dossier, { variant, employer }) : await draftEmail(dossier, { acknowledged, variant, employer, signal: controller.signal });
     return sendJson(res, 200, draft);
   } catch (error) {
