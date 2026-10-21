@@ -3,21 +3,21 @@
 /*
  * Origin API server (API-only: the static frontend is deployed separately on Vercel).
  *   GET  /api/health         liveness plus which integrations are configured (booleans only, never keys)
- *   POST /api/outreach       streams the outreach research dossier as NDJSON
- *   POST /api/email-draft    drafts a first-touch email from a dossier
+ *   POST /api/outreach       streams a SYNTHETIC research dossier as NDJSON (server/mock.js; no live lookups, no AI calls)
+ *   POST /api/email-draft    drafts a first-touch email from a dossier (the only live AI call, via OpenRouter, rate-limited)
+ * The public demo never researches real people: the live research agent (server/outreach.js, server/tools.js) is kept
+ * in the repository for reference but is not wired into this server.
  * API keys are read from the environment / .env on the server and are never sent to the browser.
  * Cross-origin calls are accepted only from the origins listed in CORS_ORIGINS.
- * Run with `npm start`, or `npm run start:mock` for a keyless demo.
+ * Run with `npm start`, or `npm run start:mock` for keyless demo email drafts as well.
  */
 const http = require("http");
 const { llmConfig } = require("./llm");
-const { runOutreach, auditLog } = require("./outreach");
 const { runMock } = require("./mock");
 const { draftEmail, mockDraft, assertCanContact, cleanEmployer } = require("./email");
-const { firecrawlConfigured, usptoEnabled } = require("./tools");
-const { startRetentionJob } = require("./audit");
 
-const MOCK = process.argv.includes("--mock") || process.env.OUTREACH_MOCK === "1";
+/* Research is always synthetic. This flag only switches email drafting to the keyless demo generator too. */
+const EMAIL_MOCK = process.argv.includes("--mock") || process.env.OUTREACH_MOCK === "1";
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT) || 8080;
 /* Frontend origins allowed to call the API (comma-separated). Defaults to the local static dev server. */
@@ -25,7 +25,8 @@ const CORS_ORIGINS = (process.env.CORS_ORIGINS || "http://localhost:5500,http://
   .split(",")
   .map((origin) => origin.trim().replace(/\/+$/, ""))
   .filter(Boolean);
-const MAX_CONCURRENT = 2;
+const MAX_RESEARCH_RUNS = 10; // synthetic runs are cheap timers
+const MAX_DRAFTS = 2; // live model calls per instance
 const RUN_TIMEOUT_MS = 240000;
 let active = 0;
 let activeDrafts = 0;
@@ -44,19 +45,11 @@ function sendJson(res, status, body) {
 }
 
 function health() {
-  const llm = llmConfig();
   return {
     status: "ok",
-    mock: MOCK,
-    tools: {
-      language_model: llm ? llm.provider : null,
-      opensanctions: Boolean(process.env.OPENSANCTIONS_API_KEY),
-      uspto: usptoEnabled() && Boolean(process.env.USPTO_API_KEY),
-      firecrawl: firecrawlConfigured(),
-      courtlistener: true,
-      openalex: true,
-      github: true
-    }
+    mock: true, // research dossiers are always synthetic
+    research: "synthetic",
+    email: EMAIL_MOCK ? "demo" : llmConfig() ? "live" : "unconfigured"
   };
 }
 
@@ -133,7 +126,7 @@ function guardApiRequest(req, res) {
 
 async function handleOutreach(req, res) {
   if (!guardApiRequest(req, res)) return;
-  if (active >= MAX_CONCURRENT) return sendJson(res, 429, { error: "Too many research runs in progress. Try again shortly." });
+  if (active >= MAX_RESEARCH_RUNS) return sendJson(res, 429, { error: "Too many research runs in progress. Try again shortly." });
 
   let subject;
   try {
@@ -142,9 +135,6 @@ async function handleOutreach(req, res) {
     return sendJson(res, error.status || 400, { error: error.message || "Invalid JSON" });
   }
   if (!subject) return sendJson(res, 422, { error: "A name, company and title are required" });
-  if (!MOCK && !llmConfig() && !process.env.OPENSANCTIONS_API_KEY) {
-    return sendJson(res, 503, { error: "No API keys are configured. Add them to .env (see .env.example) or run `npm run start:mock` for a demo." });
-  }
 
   active += 1;
   const controller = new AbortController();
@@ -153,8 +143,7 @@ async function handleOutreach(req, res) {
   res.writeHead(200, { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no", ...SECURITY_HEADERS });
   const emit = (event) => { if (!res.writableEnded) res.write(`${JSON.stringify(event)}\n`); };
   try {
-    const run = MOCK ? runMock : runOutreach;
-    const dossier = await run(subject, emit, { signal: controller.signal, ip: req.socket.remoteAddress });
+    const dossier = await runMock(subject, emit, { signal: controller.signal });
     emit({ type: "result", dossier });
   } catch (error) {
     emit({ type: "error", message: controller.signal.aborted ? "The research run was cancelled or timed out." : error.message });
@@ -169,7 +158,7 @@ async function handleOutreach(req, res) {
  * Receives the dossier and the sender's employer name only; the sender's personal details never reach this endpoint. */
 async function handleEmailDraft(req, res) {
   if (!guardApiRequest(req, res)) return;
-  if (activeDrafts >= MAX_CONCURRENT) return sendJson(res, 429, { error: "Too many drafts in progress. Try again shortly." });
+  if (activeDrafts >= MAX_DRAFTS) return sendJson(res, 429, { error: "Too many drafts in progress. Try again shortly." });
 
   let payload;
   try {
@@ -184,8 +173,9 @@ async function handleEmailDraft(req, res) {
   const employer = cleanEmployer(payload.employer);
   if (!employer) return sendJson(res, 422, { error: "A valid employer name is required (letters, numbers and basic punctuation, up to 80 characters)." });
 
-  if (!MOCK && !llmConfig()) {
-    return sendJson(res, 503, { error: "No language-model key is configured. Add OPENROUTER_API_KEY to .env (see .env.example) or run `npm run start:mock` for a demo." });
+  /* 500, not 503: 503 is reserved for the rate-limit kill switch ("demo paused"). */
+  if (!EMAIL_MOCK && !llmConfig()) {
+    return sendJson(res, 500, { error: "Email drafting is not configured on this server (OPENROUTER_API_KEY is missing)." });
   }
   activeDrafts += 1;
   const controller = new AbortController();
@@ -193,18 +183,7 @@ async function handleEmailDraft(req, res) {
   res.on("close", () => controller.abort());
   try {
     assertCanContact(dossier, acknowledged);
-    const draft = MOCK ? mockDraft(dossier, { variant, employer }) : await draftEmail(dossier, { acknowledged, variant, employer, signal: controller.signal });
-    auditLog({
-      ts: new Date().toISOString(),
-      type: "email_draft",
-      ip: req.socket.remoteAddress,
-      subject: `${String(dossier.subject.name).slice(0, 80)} @ ${String(dossier.subject.company || "").slice(0, 60)}`,
-      risk: dossier.complianceRisk,
-      acknowledged,
-      variant,
-      mode: MOCK ? "mock" : "live",
-      model: draft.model
-    });
+    const draft = EMAIL_MOCK ? mockDraft(dossier, { variant, employer }) : await draftEmail(dossier, { acknowledged, variant, employer, signal: controller.signal });
     return sendJson(res, 200, draft);
   } catch (error) {
     const status = error.status || (controller.signal.aborted ? 504 : 502);
@@ -236,13 +215,7 @@ if (require.main === module) {
     process.exit(1);
   });
   server.listen(PORT, HOST, () => {
-    const h = health();
-    console.log(`Origin API listening on http://${HOST}:${PORT}${MOCK ? "  (DEMO MODE: synthetic data)" : ""}. Allowed origins: ${CORS_ORIGINS.join(", ") || "(none)"}`);
-    console.log(`Tools: ${Object.entries(h.tools).map(([k, v]) => `${k}=${v ? "on" : "off"}`).join(", ")}`);
-    const retention = startRetentionJob();
-    console.log(retention.days
-      ? `Audit log retention: ${retention.days} days (purged ${retention.removed} old entr${retention.removed === 1 ? "y" : "ies"}, ${retention.kept} kept). Manage it with: npm run audit -- list`
-      : "Audit log retention: OFF (AUDIT_RETENTION_DAYS=0). Entries are kept until you delete them: npm run audit -- delete-all --yes");
+    console.log(`Origin API listening on http://${HOST}:${PORT} (research: synthetic, email drafts: ${health().email}). Allowed origins: ${CORS_ORIGINS.join(", ") || "(none)"}`);
   });
 }
 

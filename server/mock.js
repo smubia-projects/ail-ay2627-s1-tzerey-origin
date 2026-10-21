@@ -50,7 +50,7 @@ async function runMock(subject, emit, { signal } = {}) {
     },
     subject: { name: subject.name, company: subject.company, title: subject.title, startDate: subject.startDate || null },
     complianceRisk: "clear",
-    summary: `Demo summary for ${subject.name}. In live mode this section is written by Claude from verified web, sanctions and court evidence, and ends with an outreach recommendation.`,
+    summary: `Demo summary for ${subject.name}. In live mode this section is written by the language model from verified web, sanctions and court evidence, and ends with an outreach recommendation.`,
     profileSummary: "Illustrative profile summary. Live mode summarizes publicly indexed career history, education and skills.",
     careerHighlights: ["Illustrative career highlight one", "Illustrative career highlight two", "Illustrative career highlight three"],
     sanctions: {

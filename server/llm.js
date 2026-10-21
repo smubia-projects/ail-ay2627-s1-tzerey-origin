@@ -1,28 +1,26 @@
 "use strict";
 
 /*
- * Language-model client. Claude Sonnet is reached through OpenRouter (default) or the Anthropic API.
- * Both providers can ground an answer with live web search; citations are returned so callers can verify URLs.
+ * Language-model client, OpenRouter only (https://openrouter.ai/api/v1). The model comes from OUTREACH_MODEL.
+ * The optional `web` argument (OpenRouter's web plugin) is only used by the reference research agent in outreach.js,
+ * which the hosted server does not call.
  */
 const { fetchJson, truncate, normalizeUrl } = require("./util");
 
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const DEFAULT_MODEL = "google/gemini-2.5-flash";
+
 function llmConfig() {
-  if (process.env.OPENROUTER_API_KEY) {
-    return {
-      provider: "openrouter",
-      key: process.env.OPENROUTER_API_KEY,
-      model: process.env.OUTREACH_MODEL || "anthropic/claude-sonnet-5.5"
-    };
-  }
-  if (process.env.ANTHROPIC_API_KEY) {
-    return {
-      provider: "anthropic",
-      key: process.env.ANTHROPIC_API_KEY,
-      model: process.env.OUTREACH_MODEL || process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5"
-    };
-  }
-  return null;
+  if (!process.env.OPENROUTER_API_KEY) return null;
+  return {
+    provider: "openrouter",
+    key: process.env.OPENROUTER_API_KEY,
+    model: process.env.OUTREACH_MODEL || DEFAULT_MODEL
+  };
 }
+
+/* OpenRouter attribution: the public frontend URL (first CORS origin) when set. */
+const siteUrl = () => (process.env.CORS_ORIGINS || "").split(",")[0].trim() || "http://localhost";
 
 function dedupeCitations(list) {
   const seen = new Set();
@@ -48,13 +46,13 @@ async function viaOpenRouter(cfg, { system, user, web, maxTokens, signal, temper
   };
   if (web) body.plugins = [{ id: "web", max_results: web.maxResults || 6 }];
   const json = await fetchJson(
-    "https://openrouter.ai/api/v1/chat/completions",
+    OPENROUTER_URL,
     {
       method: "POST",
       headers: {
         Authorization: `Bearer ${cfg.key}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost",
+        "HTTP-Referer": siteUrl(),
         "X-Title": "Origin outreach agent"
       },
       body: JSON.stringify(body)
@@ -71,46 +69,10 @@ async function viaOpenRouter(cfg, { system, user, web, maxTokens, signal, temper
   return { text, citations: dedupeCitations(citations), usage: json.usage || null };
 }
 
-async function viaAnthropic(cfg, { system, user, web, maxTokens, signal, temperature }) {
-  const body = {
-    model: cfg.model,
-    max_tokens: maxTokens,
-    temperature: temperature ?? 0.2,
-    system,
-    messages: [{ role: "user", content: user }]
-  };
-  if (web) body.tools = [{ type: "web_search_20250305", name: "web_search", max_uses: Math.min(web.maxResults || 5, 8) }];
-  const json = await fetchJson(
-    "https://api.anthropic.com/v1/messages",
-    {
-      method: "POST",
-      headers: { "x-api-key": cfg.key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify(body)
-    },
-    { timeoutMs: web ? 150000 : 100000, signal, retries: 1 }
-  );
-  const blocks = json.content || [];
-  const text = blocks.filter((b) => b.type === "text").map((b) => b.text || "").join("");
-  const citations = [];
-  for (const block of blocks) {
-    if (block.type === "text") {
-      for (const c of block.citations || []) {
-        if (c.url) citations.push({ url: c.url, title: c.title, snippet: truncate(c.cited_text || "", 500) });
-      }
-    } else if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
-      for (const r of block.content) {
-        if (r.url) citations.push({ url: r.url, title: r.title, snippet: "" });
-      }
-    }
-  }
-  return { text, citations: dedupeCitations(citations), usage: json.usage || null };
-}
-
 async function complete({ system, user, web = null, maxTokens = 2500, signal, temperature }) {
   const cfg = llmConfig();
-  if (!cfg) throw new Error("No language-model key configured (set OPENROUTER_API_KEY or ANTHROPIC_API_KEY).");
-  const args = { system, user, web, maxTokens, signal, temperature };
-  return cfg.provider === "openrouter" ? viaOpenRouter(cfg, args) : viaAnthropic(cfg, args);
+  if (!cfg) throw new Error("No language-model key configured (set OPENROUTER_API_KEY).");
+  return viaOpenRouter(cfg, { system, user, web, maxTokens, signal, temperature });
 }
 
 module.exports = { llmConfig, complete };

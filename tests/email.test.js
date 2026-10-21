@@ -6,7 +6,6 @@ const assert = require("node:assert/strict");
 const http = require("node:http");
 
 process.env.OPENROUTER_API_KEY = "FAKE_OPENROUTER_KEY_FOR_TESTS_ONLY";
-process.env.OUTREACH_AUDIT_DIR = require("path").join(require("os").tmpdir(), "origin-test-audit");
 
 const { draftEmail, mockDraft, extractContext, validateDraft, assertCanContact, SYSTEM } = require("../server/email");
 const { server } = require("../server/server");

@@ -7,7 +7,6 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 
-process.env.OUTREACH_AUDIT_DIR = path.join(require("node:os").tmpdir(), "origin-test-audit");
 const { server } = require("../server/server");
 const DataLoader = require("../data-loader.js");
 const read = (...p) => fs.readFileSync(path.join(__dirname, "..", ...p), "utf8");
