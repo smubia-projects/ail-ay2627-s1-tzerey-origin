@@ -93,7 +93,7 @@ flowchart LR
 
 **Privacy and accountability**
 - Nothing runs until a human presses a button. Keys stay on the server. A compliance hold blocks email drafting.
-- An audit log records each research run and email draft, **expires automatically after 30 days**, and can be erased per person or entirely with one command ([Data retention and deletion](#data-retention-and-deletion)).
+- The hosted API keeps no audit log and writes nothing to disk ([Data retention and deletion](#data-retention-and-deletion)).
 
 ## 4. AI Integration
 
@@ -101,9 +101,9 @@ flowchart LR
 
 | # | Component | What the AI does | Model | Settings |
 |---|-----------|------------------|-------|----------|
-| 1 | **Web research agents** (8 topics: profile, press, writing, podcasts, social, video, legal/adverse media, business interests) | Searches the live web (or reads Firecrawl pages) and returns structured findings, each with a source URL, a date and a match-confidence with reasons | Claude Sonnet 5.5, via OpenRouter's web-search plugin (or the model vendor's own API) | Temperature 0.2, JSON output |
-| 2 | **Synthesis agent** | Reads only the verified evidence and writes the executive summary, profile summary, career highlights, an outreach strategy (angle, conversation starters, channel, timing, things to avoid) and a list of data gaps | Claude Sonnet 5.5 | Temperature 0.2, JSON output |
-| 3 | **Email drafting agent** | Writes a short, warm invitation from the outreach strategy and a few high-confidence public items, mentioning the sender's employer by name | Claude Sonnet 5.5 | Temperature 0.7, JSON output, up to 3 attempts |
+| 1 | **Web research agents** (8 topics: profile, press, writing, podcasts, social, video, legal/adverse media, business interests) | Searches the live web (or reads Firecrawl pages) and returns structured findings, each with a source URL, a date and a match-confidence with reasons | `OUTREACH_MODEL` via OpenRouter's web-search plugin. Reference code only: not wired into the hosted API | Temperature 0.2, JSON output |
+| 2 | **Synthesis agent** | Reads only the verified evidence and writes the executive summary, profile summary, career highlights, an outreach strategy (angle, conversation starters, channel, timing, things to avoid) and a list of data gaps | `OUTREACH_MODEL`. Reference code only: not wired into the hosted API | Temperature 0.2, JSON output |
+| 3 | **Email drafting agent** | Writes a short, warm invitation from the outreach strategy and a few high-confidence public items, mentioning the sender's employer by name | `OUTREACH_MODEL` via OpenRouter (default `google/gemini-2.5-flash`). The only AI call in the hosted demo | Temperature 0.7, JSON output, up to 3 attempts |
 
 Override the model with `OUTREACH_MODEL`.
 
@@ -131,7 +131,7 @@ Override the model with `OUTREACH_MODEL`.
 
 | Service | Used for | Key needed | Notes |
 |---------|----------|-----------|-------|
-| [OpenRouter](https://openrouter.ai/) running **Claude Sonnet 5.5** | Research agents, synthesis, email drafting, live web search | `OPENROUTER_API_KEY` | Required for live mode. The provider receives the researched person's name and public snippets, so review its data-handling terms |
+| [OpenRouter](https://openrouter.ai/) running `OUTREACH_MODEL` (default `google/gemini-2.5-flash`) | Email drafting (the research agents in `server/outreach.js` are reference code, not used by the hosted API) | `OPENROUTER_API_KEY` | Required for live email drafts. The provider receives the (synthetic) dossier's outreach strategy and the employer name |
 | The model vendor's own API | Alternative to OpenRouter | a vendor key (see `.env.example`) | Used only if no OpenRouter key is set |
 | [OpenSanctions](https://www.opensanctions.org/api/) | Sanctions, PEP and watchlist matching | `OPENSANCTIONS_API_KEY` | Strongly recommended. Check licence terms for commercial use |
 | [CourtListener](https://www.courtlistener.com/help/api/) (Free Law Project) | Public federal court dockets | `COURTLISTENER_TOKEN` (optional) | Token only raises rate limits |
@@ -153,76 +153,51 @@ Override the model with `OUTREACH_MODEL`.
 
 ### Software
 
-Node.js built-ins only at runtime (no `npm install` needed), plus [jsPDF](https://github.com/parallax/jsPDF) 4.2.1 (MIT), bundled in `vendor/` for PDF export.
+> **Hosted AI Lodge demo:** research dossiers are always synthetic (no live lookups on anyone); only the email draft is written live by an AI model through OpenRouter, rate-limited per visitor. See [Installation & Setup](#6-installation--setup).
+
+A zero-dependency Node API (plus `@upstash/redis` for rate limiting) and a static frontend, plus [jsPDF](https://github.com/parallax/jsPDF) 4.2.1 (MIT), bundled in `vendor/` for PDF export.
 
 ## 6. Installation & Setup
 
+Origin is two parts:
+
+| Part | What it is | Hosted on |
+|------|------------|-----------|
+| Frontend | Static vanilla-JS site (landing page, dashboard, equity model, PDF dossier). `tools/build-demo.js` copies the whitelisted files into `public/` and writes `config.js` with the API URL from `VITE_API_BASE` | Vercel |
+| API | Zero-dependency Node `http` server (`server/server.js`), API-only | Google Cloud Run |
+
+API routes:
+
+| Route | What it does |
+|-------|--------------|
+| `GET /api/health` | `{"status":"ok", ...}` plus which mode email drafting is in |
+| `POST /api/outreach` | Streams a **synthetic** research dossier (`server/mock.js`). The public demo never researches real people: no web search, OpenSanctions, CourtListener or Firecrawl calls. The live research agent (`server/outreach.js`, `server/tools.js`) stays in the repository for reference but is not wired into the server |
+| `POST /api/email-draft` | The only live AI call: drafts the first-touch email through OpenRouter (`OUTREACH_MODEL`, default `google/gemini-2.5-flash`). Rate-limited per visitor with the shared AI Lodge engine (bucket `email`) |
+
 ### Prerequisites
 
-- **Node.js 22.9 or newer** (developed and tested on Node 24). Check with `node --version`. Download from [nodejs.org](https://nodejs.org/).
-- A modern browser (Chrome, Edge, Firefox or Safari).
-- For live research: an OpenRouter API key (see step 3).
-- There are **no runtime dependencies**, so `npm install` is not required.
+- **Node.js 22.9 or newer** (developed and tested on Node 24). Check with `node --version`.
+- A modern browser.
+- For live email drafts: an OpenRouter API key. Without one, use `npm run start:mock` for keyless demo drafts.
 
-### Step by step
-
-**1. Get the code**
+### Run locally
 
 ```bash
-git clone <your-repository-url>
-cd <repository-folder>
+npm install                 # one runtime dependency: @upstash/redis (rate limiting)
+cp .env.example .env        # Windows PowerShell: Copy-Item .env.example .env, then fill in OPENROUTER_API_KEY
+npm start                   # API on http://localhost:8080 (npm run start:mock: demo email drafts, no keys)
 ```
 
-**2. Create your environment file**
+In a second terminal, build and serve the frontend:
 
 ```bash
-# macOS / Linux
-cp .env.example .env
-
-# Windows (PowerShell)
-Copy-Item .env.example .env
+npm run build:demo          # writes public/ and public/config.js (VITE_API_BASE defaults to http://localhost:8080)
+npx serve public -l 5500    # or: python -m http.server 5500 -d public
 ```
 
-**3. Add your keys to `.env`**
+Open <http://localhost:5500/app.html>. `CORS_ORIGINS` defaults to `http://localhost:5500,http://127.0.0.1:5500`. Without the `UPSTASH_*` variables rate limiting is off, which is fine for local development.
 
-Open `.env` in a text editor. The file is documented line by line. At minimum:
-
-| Goal | What to fill in |
-|------|-----------------|
-| Just look around (sample data, no API calls) | Nothing. Skip to step 4 and use demo mode (`npm run start:mock`) |
-| Live research and email drafting | `OPENROUTER_API_KEY` ([get one](https://openrouter.ai/keys)) |
-| Proper compliance screening | Also `OPENSANCTIONS_API_KEY` |
-| Everything else | Optional. Leave blank or commented out |
-
-> `.env` is git-ignored. **Never commit it, and never paste keys into code or issues.**
-
-**4. Start the app**
-
-```bash
-npm start            # live mode (uses the keys in .env)
-npm run start:mock   # demo mode: synthetic dossiers and emails, no keys and no API calls
-```
-
-On Windows PowerShell, if `npm` is blocked by script-execution policy, use `npm.cmd start`.
-
-You should see `Origin is running at http://127.0.0.1:8787/app.html` followed by the audit-log retention setting.
-
-**5. Open it**
-
-- Dashboard: <http://127.0.0.1:8787/app.html>
-- Landing page: <http://127.0.0.1:8787/>
-
-The page must be opened **through the server**. Opening `app.html` directly from disk will not work because the research agent needs the local API.
-
-**6. Try it**
-
-1. The page asks for data: click **Try the sample data**, or choose your own file. The loading animation plays, then the ranked prospects appear.
-2. Click **Details** on any prospect.
-3. Click **Initiate outreach** and watch the agents work (a few seconds in demo mode).
-4. When the dossier appears, click **Download dossier (PDF)** or **Start a conversation**.
-5. Fill in your sign-off details and employer name, review the drafted email, then **Open in email app**.
-
-> The sample prospects are made up, so **live** research on them will correctly find nothing. Use demo mode (`npm run start:mock`) to try the full flow, or load your own lawful data ([section 7](#7-using-your-own-data)) to run live research.
+Then: **Try the sample data**, **Details** on a prospect, **Initiate outreach** (synthetic dossier in a few seconds), and **Start a conversation** to draft the email.
 
 ### Run the tests
 
@@ -230,7 +205,7 @@ The page must be opened **through the server**. Opening `app.html` directly from
 npm test
 ```
 
-All 101 tests use stubbed network calls and temporary folders, so they need no keys and cost nothing.
+The tests stub every network call (OpenRouter and Upstash), so they need no keys and cost nothing.
 
 ### Optional: live check of the email writer
 
@@ -238,37 +213,33 @@ All 101 tests use stubbed network calls and temporary folders, so they need no k
 node --env-file=.env tools/check-email-live.js
 ```
 
-Makes two real model calls on a **fictional** dossier so you can read the model's output. Uses a little of your API credit.
+Makes two real model calls on a **fictional** dossier. Uses a little OpenRouter credit.
 
-### Deploy a hosted demo to Vercel (optional)
+### Deploy (AI Lodge stack)
 
-Vercel can host a **demo-only** copy of Origin: the static site plus small serverless functions that always run in mock mode. Visitors can try the sample data and see synthetic research results and email drafts. **No API keys, no live lookups and no real people are involved**, and the demo shows a banner saying so. (The full live app needs a long-running server and a login, so it is not supported on Vercel. Run it locally with `npm start`.)
+**API to Cloud Run.** `.github/workflows/deploy.yml` runs on every push to `master` (or manually with `gh workflow run deploy.yml`). It builds the `Dockerfile` (build context: repository root), pushes `docker.io/<DOCKERHUB_USERNAME>/ail-ay2627-s1-tzerey-origin`, and deploys the Cloud Run service `ail-ay2627-s1-tzerey-origin` in `asia-southeast3` with the env vars from the repo's `DOTENV` secret:
 
-1. **Commit and push** the project to GitHub. A private repository is fine. `private/`, `.env` and `logs/` are git-ignored and never leave your machine.
-2. On [vercel.com](https://vercel.com), choose **Add New, then Project**, and import the repository.
-3. Leave the settings as detected: `vercel.json` already sets the build command (`node tools/build-demo.js`), the output folder (`public`) and the security headers. **You do not need to add any environment variables.**
-4. Press **Deploy**. When it finishes, open `https://<your-project>.vercel.app`. The landing page is at `/` and the dashboard at `/app.html`.
-5. Check it: the yellow demo banner shows, **Try the sample data** works, **Initiate outreach** returns a synthetic dossier after about five seconds, and `/api/health` shows `"mock": true`.
+```bash
+gh secret set DOTENV --repo smubia-projects/ail-ay2627-s1-tzerey-origin < .env
+```
 
-Prefer the command line? Run `npm install -g vercel`, then `vercel login`, `vercel` (a preview) and `vercel --prod`. `.vercelignore` keeps private files out of the upload.
+`DOTENV` needs `OPENROUTER_API_KEY`, `OUTREACH_MODEL`, `CORS_ORIGINS`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, plus the optional `RATE_LIMIT_EMAIL_MAX`, `RATE_LIMIT_WINDOW_SECONDS` and `OUTREACH_MOCK_SPEED` (see `.env.example`).
 
-Good to know:
-- The demo functions delete any keys found in their environment and refuse to start unless mock mode is on, so a settings mistake cannot make the public demo run live research.
-- Anyone can open the URL. Visitors' own files are read only in their browser, but tell them to use fictional data. To limit access, use Vercel's Deployment Protection settings (availability depends on your plan) or a custom domain with your own login in front.
-- Vercel's free Hobby plan is intended for personal, non-commercial use. Check their current terms before using it to show investors.
-- `npm run build:demo` builds the same `public/` folder locally so you can inspect exactly what would be published (16 files).
+**Frontend to Vercel.** Import the repository with the root directory left at the repository root. `vercel.json` sets the build command (`node tools/build-demo.js`), the output folder (`public`) and the security headers. Set one environment variable, `VITE_API_BASE`, to the Cloud Run URL. The Content-Security-Policy allows `connect-src https://*.run.app`; if the API ever moves to another domain, add it there.
 
+**Wire CORS.** Put the Vercel URL in `CORS_ORIGINS` in `.env`, re-upload `DOTENV` and re-run the workflow.
+
+When a visitor reaches the email-draft limit the page shows the AI Lodge call-to-action; when the project is paused from the central rate-limit sheet the page shows a "demo temporarily paused" notice instead.
 
 ### Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| "Could not reach the local research service" | The server is not running, or you opened the file directly. Run `npm start` and use the `http://127.0.0.1:8787` address |
-| `EADDRINUSE` / "Port 8787 is already in use" | Stop the other process or set `PORT=8788` in `.env` |
-| Every research step says "skipped" | Keys were not loaded. Check that `.env` is in the project root, then restart |
+| "Could not reach the email service" or research fails at once | The API is not running, `VITE_API_BASE` points to the wrong URL, or the page's origin is missing from `CORS_ORIGINS` |
+| `EADDRINUSE` / "Port 8080 is already in use" | Stop the other process or set `PORT` in `.env` (then rebuild the frontend with a matching `VITE_API_BASE`) |
+| Email drafting returns "not configured" | `OPENROUTER_API_KEY` is missing. Add it, or run `npm run start:mock` |
 | OpenRouter 401 or 402 error | Key invalid or out of credit. Check it on openrouter.ai |
 | "Open in email app" does nothing | No default email application is configured. Use **Copy email** instead |
-| Changed `.env` but nothing happened | Restart the server; `.env` is read at startup |
 | My file will not load | The dialog says why. The usual causes are single quotes instead of double quotes, a trailing expression or function in the data, or a date that is not `YYYY-MM-DD` |
 
 ## 7. Using Your Own Data
@@ -345,46 +316,33 @@ The sample's company figures are invented placeholders. For real estimates, buil
 | **Prompt injection through the employer field or web pages** | Untrusted text could steer the model | The employer name is restricted to plain text (no control characters, markup or links). Web content is treated as evidence to be summarised, and all outputs are validated and grounded in code |
 | **Over-trusting the equity estimate** | A modeled number can be read as fact | Always labelled "Modeled, not verified". Shown as a range with a confidence rating and explicit flags. Impossible records are shown as n/a. Flagged founders are marked as underestimated |
 | **Real people exposed in a public repository** | A list of named people with wealth estimates could help scammers or stalkers | **No prospect data ships with the repository**: the only data files are a template and a 14-person fictional sample. Real data lives in your browser tab or the git-ignored `private/` folder (the CSV importer writes there by default); dossiers, PDFs, audit logs and `.env` are git-ignored |
-| **Personal data kept indefinitely** | Old research on named people is a liability and breaches data-minimisation rules | The audit log **expires after 30 days** automatically (configurable) and supports per-person and total deletion. The server never writes dossier contents to disk, and uploaded data is never written to disk at all |
+| **Personal data kept indefinitely** | Old research on named people is a liability and breaches data-minimisation rules | The hosted API stores nothing: no audit log, no dossiers, nothing on disk. Uploaded data is never sent to the server at all |
 | **Web attacks on the local server** | The API fetches data and calls paid services | Binds to localhost by default; same-origin and header checks on the POST APIs; a whitelist of servable files; a strict Content-Security-Policy (`script-src 'self'`); request-size limits, concurrency limits and timeouts; HTML-escaping of all model- and data-derived text |
-| **No record of who researched whom** | Accountability | Every research run and email draft is written to a local audit log (`logs/outreach-audit.jsonl`, git-ignored), within the retention limit |
+| **No record of who researched whom** | Accountability | Not applicable to the hosted demo, which only produces synthetic research. A real deployment would need its own audit trail |
 
 ### Data retention and deletion
 
-**What is stored, and where**
+The hosted API stores nothing: it keeps no audit log and writes nothing to disk (Cloud Run's disk is ephemeral). The only server-side state is the rate-limit counter in Upstash Redis, keyed by the visitor's IP address and expiring after the rate-limit window.
 
 | Data | Where | How long |
 |------|-------|----------|
-| Audit entries: time, name and company researched, compliance status, step outcomes, number of sources | `logs/outreach-audit.jsonl` on the server | **30 days by default**, then deleted automatically |
-| The dossier itself (findings, summary, strategy) | In the browser tab's memory only | Until you close or reload the page. The server does not save it |
+| The dossier itself (findings, summary, strategy) | In the browser tab's memory only | Until you close or reload the page |
 | Data you loaded (your file or the sample) | The browser tab's memory and session storage | Until you close the tab or choose Load different data |
 | Downloaded PDF or JSON dossiers and sent emails | Wherever you save them or send them | Your responsibility. Delete them per your firm's policy |
 | Your sign-off details | Your browser's local storage, only if you leave "Remember these details" ticked | Until you untick it, or clear site data |
 
-**Automatic retention.** On startup and every six hours the server deletes audit entries older than `AUDIT_RETENTION_DAYS` (default `30`). Set it to `0` to turn automatic deletion off (not recommended). Entries without a readable timestamp are deleted too, since their age cannot be verified.
-
-**Deletion on request** (for example when someone replies "no thanks" or exercises an erasure right):
-
-```bash
-npm run audit -- list                                  # show what is stored (names, dates, status only)
-npm run audit -- delete --name "Jane Roe"              # erase every entry about one person
-npm run audit -- delete --name "Jane Roe" --company "Company A"
-npm run audit -- purge --days 7                        # delete anything older than 7 days now
-npm run audit -- delete-all --yes                      # erase the whole log
-```
-
-Run these while the server is idle. Honouring a request also means removing the person from your own prospect list (add them to `EXCLUDED` in `tools/import-prospects.js` or remove their row from your data file), your CRM and your mailbox. The tool cannot reach those.
+Honouring an erasure request also means removing the person from your own prospect list (add them to `EXCLUDED` in `tools/import-prospects.js` or remove their row from your data file), your CRM and your mailbox.
 
 ### Testing done
 
-**Automated (`npm test`): 101 tests across 10 files, no keys or network required.**
+**Automated (`npm test`): every network call stubbed, no keys required.** (Counts below are from the original project; the hosted-demo cleanup removed the audit-log tests and replaced the Vercel-function tests with API-only, CORS and rate-limit tests in `tests/server.test.js`, `tests/vercel.test.js` and `tests/ratelimit.test.js`.)
 
 | File | Tests | What it covers |
 |------|-------|----------------|
 | `tests/pipeline.test.js` | 8 | End-to-end research pipeline with every external API stubbed: grounding, dropping hallucinated URLs, sensitive-content and PII filtering, low-confidence separation, sanctions hold, missing-key behaviour, **API keys never appear in output**, USPTO disabled by default, press and podcast agents, and that **no forum agent exists or is queried** |
 | `tests/email.test.js` | 16 | What the model is and is not given (wealth, legal and screening data never reach it), the banned-topic validator (including false claims of having "no agenda" or "nothing to sell"), retry and fail-closed behaviour, the compliance gate (hold, review, not screened), the HTTP endpoint (headers, cross-origin rejection, status codes), employer-name validation and injection attempts |
 | `tests/compose.test.js` | 8 | The exact signature format, **the transparency and opt-out line (present once, after the signature, with every promised element)**, cleaning and validation of the details form, safe `mailto:` links (encoding, line breaks, blocked header injection) and that a realistic email still fits in a link |
-| `tests/audit.test.js` | 10 | **Retention and deletion**: append, purge by age, unreadable entries, retention settings (default, custom, off), startup purge, per-person erasure that spares similar names, delete-all, no stray temp files, and the command-line tool including the `--yes` safeguard |
+| `tests/ratelimit.test.js` | 1 | **Rate limiting** against a fake Upstash endpoint: per-IP counting on `/api/email-draft`, 429 with `detail.queries_used`, validation failures not counted, and the kill switch returning 503 |
 | `tests/datapack.test.js` | 15 | **The data-file loader**: both templates and the sample pack load; **each section reads only its own part of a file**; accepted shapes; comments and trailing commas; **a file with code in it is read but never run, and code in place of data is refused**; clear errors for empty, oversized, broken or unrecognised files; bad rows skipped with row numbers; duplicates; unknown fields dropped; hostile text kept as plain text; the dialog never uses `innerHTML` |
 | `tests/model.test.js` | 16 | **The model starts empty** (no built-in company data; an unknown company is n/a); **the fictional sample** (14 numbered people, 2 companies, one impossible date, flags for the founder and the early hire); the **company-profile mechanism** (data-driven vesting, valid and invalid profiles with readable reasons, prototype-name tricks, explicit levels in titles, role-band overrides, seniority ordering); impossible start dates are never estimated |
 | `tests/server.test.js` | 6 | **The upload-first flow**: no bundled prospect-list file exists in the app; the page opens with two upload sections (prospects first, then company profiles) where the loading animation starts; **there is no Skip animation or Simulate loading button**; loading data starts the animation; the server serves the sample pack and both templates but refuses private files, `.env`, server code and path tricks; the sample and templates contain no real-looking data |
@@ -466,7 +424,7 @@ Origin profiles people who have not asked to be profiled. That is the central et
 | **Limited retention** | Audit log expires after 30 days; per-person erasure command; dossiers are not stored server-side; no prospect data in the repository |
 | **Accuracy and humility** | Estimates are ranges with confidence and flags; findings need sources; weak matches are separated; impossible data and unprofiled companies are n/a |
 | **Safe by construction** | Loaded files are parsed as data and never run; everything shown from a file is escaped |
-| **Accountability** | An audit log shows who was researched and when, and every compliance override is a deliberate confirmation |
+| **Accountability** | Every compliance override is a deliberate confirmation |
 
 ### Ethical tensions we want you to see
 
@@ -485,7 +443,7 @@ Treat this checklist as a minimum, not legal advice. Involve your legal and comp
 2. **Privacy notice and impact assessment.** Complete a data-protection impact assessment where required, and make sure people are told what you hold and why (the email footer helps but is not a full notice).
 3. **Marketing and e-privacy rules.** Check consent, sender-identification and unsubscribe requirements for every country you contact (for example CAN-SPAM, GDPR/PECR, CASL). Provide a postal address if your law requires one.
 4. **Processor agreements.** Review the data-handling and retention terms of OpenRouter (or the model vendor), OpenSanctions, Firecrawl and any other service you enable.
-5. **Opt-outs and erasure.** Decide who monitors replies to the opt-out line, and wire `npm run audit -- delete` and your own suppression list into that process.
+5. **Opt-outs and erasure.** Decide who monitors replies to the opt-out line, and wire your own suppression list into that process.
 6. **Access and storage.** Run it only on a secured machine. Keep `.env`, `logs/`, `private/` and downloaded dossiers off shared or public locations.
 7. **Company figures.** Source and verify the profiles you load, and record where each figure came from.
 8. **Review and training.** Make sure every user knows the tool's limits and that outputs are drafts to be checked, not facts.
@@ -516,21 +474,22 @@ templates/
   sample-data-pack.js          The fictional sample (14 people, 2 made-up companies) behind "Try the sample data"
 vendor/                   jsPDF (MIT), bundled
 server/
-  server.js               HTTP server, API endpoints, security headers, file whitelist
-  outreach.js             Research pipeline, topics, privacy filters, risk rating
-  audit.js                Audit log with automatic retention and deletion
+  server.js               API-only HTTP server: endpoints, CORS, security headers
+  rateLimit.js            Adapter for the shared AI Lodge rate-limit engine (bucket "email")
+  rate-limit/             The shared engine, copied unmodified (ES module)
+  outreach.js             Live research pipeline (reference only, not wired into the server), privacy filters, risk rating
   tools.js                OpenSanctions, CourtListener, OpenAlex, GitHub, Firecrawl, USPTO clients
   email.js                Email drafting, banned-topic validation, compliance gate
-  llm.js                  Language-model client (OpenRouter or the vendor's own API)
+  llm.js                  Language-model client (OpenRouter only)
   mock.js                 Synthetic dossier and email for demo mode
   util.js                 Shared helpers
 tools/
   import-prospects.js               Turns YOUR OWN CSV into a private data file (cleaning, exclusions)
-  audit-log.js                      List, purge and erase audit-log entries
   check-email-live.js               Manual live check of the email writer
-  build-demo.js                     Builds the static demo site into public/ (whitelisted files only)
-api/                      Demo-only API functions for the hosted Vercel demo (always mock mode)
-vercel.json               Vercel build command, function time limit and security headers
+  build-demo.js                     Builds the static site into public/ (whitelisted files) and writes config.js from VITE_API_BASE
+Dockerfile, .dockerignore Cloud Run image for the API
+.github/workflows/        deploy.yml: Docker Hub + Cloud Run deploy on push to master
+vercel.json               Vercel build command, output folder and security headers
 .vercelignore             Files never uploaded when deploying with the Vercel CLI
 tests/                    Automated tests (npm test)
 private/                  Git-ignored: keep real data and real company profiles here, on your machine only
