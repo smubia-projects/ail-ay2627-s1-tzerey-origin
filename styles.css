@@ -537,3 +537,30 @@ button { color: inherit; }
 .c-working p { margin: 0; }
 .c-foot { display: block; margin-top: 14px; color: var(--quiet); font-size: 12px; line-height: 1.5; }
 @media (max-width: 560px) { .c-grid { grid-template-columns: 1fr; } .compose-dialog { padding: 24px 20px; } }
+/* ---------------------------------------------------------------- AI Lodge rate-limit CTA (429) */
+.rl-modal { width: min(420px, calc(100% - 32px)); max-height: calc(100vh - 32px); padding: 0; overflow-y: auto; border: 0; border-radius: 24px; background: #0d1526; color: var(--text); box-shadow: 0 40px 120px rgba(2, 6, 23, .8); }
+.rl-modal::backdrop { background: rgba(2, 6, 23, .7); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.rl-modal[open] { animation: rl-card-in .6s cubic-bezier(.34, 1.56, .64, 1); }
+.rl-modal[open]::backdrop { animation: rl-fade-in .5s ease; }
+.rl-banner { position: relative; padding: 36px 28px 28px; overflow: hidden; background: linear-gradient(135deg, var(--rl-accent, #6366f1), color-mix(in srgb, var(--rl-accent, #6366f1) 55%, #a78bfa)); text-align: center; }
+.rl-circle { position: absolute; border-radius: 50%; background: rgba(255, 255, 255, .12); pointer-events: none; }
+.rl-circle-1 { top: -40px; right: -30px; width: 140px; height: 140px; }
+.rl-circle-2 { bottom: -50px; left: -40px; width: 120px; height: 120px; background: rgba(255, 255, 255, .08); }
+.rl-emoji { position: relative; display: block; margin-bottom: 10px; font-size: 44px; line-height: 1; }
+.rl-headline { position: relative; margin: 0 0 8px; font-size: 22px; font-weight: 800; letter-spacing: -.03em; }
+.rl-description { position: relative; margin: 0; color: rgba(255, 255, 255, .88); font-size: 14.5px; line-height: 1.55; }
+.rl-body { display: grid; gap: 10px; padding: 24px 24px 18px; }
+.rl-btn { position: relative; display: flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 44px; border-radius: 14px; font-weight: 700; font-size: 15px; text-align: center; transition: transform .2s var(--ease), filter .2s var(--ease); }
+.rl-btn:hover { transform: translateY(-1px); filter: brightness(1.08); }
+.rl-btn:focus-visible, .rl-dismiss:focus-visible { outline: 2px solid var(--indigo-3); outline-offset: 2px; }
+.rl-btn-primary { background: linear-gradient(135deg, var(--rl-accent, #6366f1), color-mix(in srgb, var(--rl-accent, #6366f1) 55%, #a78bfa)); color: #fff; }
+.rl-btn-secondary { border: 1px solid #2a3852; background: #131d33; color: var(--text); }
+.rl-arrow { position: absolute; right: 18px; }
+.rl-dismiss { margin-top: 4px; padding: 8px; border: 0; background: none; color: var(--muted); font-size: 14px; cursor: pointer; }
+.rl-dismiss:hover { color: var(--text); }
+@keyframes rl-card-in { from { opacity: 0; transform: scale(.95); } to { opacity: 1; transform: scale(1); } }
+@keyframes rl-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .rl-modal[open], .rl-modal[open]::backdrop { animation: none; } }
+
+/* "Demo paused" notice (503 from the rate-limit kill switch) inside the compose dialog */
+.c-paused { padding: 14px 16px; border: 1px solid rgba(251, 191, 36, .35); border-radius: 14px; background: rgba(251, 191, 36, .08); color: #fde68a; }
