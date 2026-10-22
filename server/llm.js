@@ -7,15 +7,15 @@
  */
 const { fetchJson, truncate, normalizeUrl } = require("./util");
 
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const openrouterUrl = () => `${((process.env.API_BASE_URL || process.env.OPENROUTER_BASE_URL)?.trim() || "https://openrouter.ai/api/v1").replace(/\/+$/, "")}/chat/completions`;
 const DEFAULT_MODEL = "google/gemini-2.5-flash";
 
 function llmConfig() {
-  if (!process.env.OPENROUTER_API_KEY) return null;
+  if (!(process.env.API_KEY || process.env.OPENROUTER_API_KEY)) return null;
   return {
     provider: "openrouter",
-    key: process.env.OPENROUTER_API_KEY,
-    model: process.env.OUTREACH_MODEL || DEFAULT_MODEL
+    key: (process.env.API_KEY || process.env.OPENROUTER_API_KEY),
+    model: (process.env.MODEL_NAME || process.env.OUTREACH_MODEL) || DEFAULT_MODEL
   };
 }
 
@@ -46,7 +46,7 @@ async function viaOpenRouter(cfg, { system, user, web, maxTokens, signal, temper
   };
   if (web) body.plugins = [{ id: "web", max_results: web.maxResults || 6 }];
   const json = await fetchJson(
-    OPENROUTER_URL,
+    openrouterUrl(),
     {
       method: "POST",
       headers: {

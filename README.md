@@ -101,11 +101,11 @@ flowchart LR
 
 | # | Component | What the AI does | Model | Settings |
 |---|-----------|------------------|-------|----------|
-| 1 | **Web research agents** (8 topics: profile, press, writing, podcasts, social, video, legal/adverse media, business interests) | Searches the live web (or reads Firecrawl pages) and returns structured findings, each with a source URL, a date and a match-confidence with reasons | `OUTREACH_MODEL` via OpenRouter's web-search plugin. Reference code only: not wired into the hosted API | Temperature 0.2, JSON output |
-| 2 | **Synthesis agent** | Reads only the verified evidence and writes the executive summary, profile summary, career highlights, an outreach strategy (angle, conversation starters, channel, timing, things to avoid) and a list of data gaps | `OUTREACH_MODEL`. Reference code only: not wired into the hosted API | Temperature 0.2, JSON output |
-| 3 | **Email drafting agent** | Writes a short, warm invitation from the outreach strategy and a few high-confidence public items, mentioning the sender's employer by name | `OUTREACH_MODEL` via OpenRouter (default `google/gemini-2.5-flash`). The only AI call in the hosted demo | Temperature 0.7, JSON output, up to 3 attempts |
+| 1 | **Web research agents** (8 topics: profile, press, writing, podcasts, social, video, legal/adverse media, business interests) | Searches the live web (or reads Firecrawl pages) and returns structured findings, each with a source URL, a date and a match-confidence with reasons | `MODEL_NAME` via OpenRouter's web-search plugin. Reference code only: not wired into the hosted API | Temperature 0.2, JSON output |
+| 2 | **Synthesis agent** | Reads only the verified evidence and writes the executive summary, profile summary, career highlights, an outreach strategy (angle, conversation starters, channel, timing, things to avoid) and a list of data gaps | `MODEL_NAME`. Reference code only: not wired into the hosted API | Temperature 0.2, JSON output |
+| 3 | **Email drafting agent** | Writes a short, warm invitation from the outreach strategy and a few high-confidence public items, mentioning the sender's employer by name | `MODEL_NAME` via OpenRouter (default `google/gemini-2.5-flash`). The only AI call in the hosted demo | Temperature 0.7, JSON output, up to 3 attempts |
 
-Override the model with `OUTREACH_MODEL`.
+Override the model with `MODEL_NAME`.
 
 ### Where AI is deliberately **not** used
 
@@ -131,7 +131,7 @@ Override the model with `OUTREACH_MODEL`.
 
 | Service | Used for | Key needed | Notes |
 |---------|----------|-----------|-------|
-| [OpenRouter](https://openrouter.ai/) running `OUTREACH_MODEL` (default `google/gemini-2.5-flash`) | Email drafting (the research agents in `server/outreach.js` are reference code, not used by the hosted API) | `OPENROUTER_API_KEY` | Required for live email drafts. The provider receives the (synthetic) dossier's outreach strategy and the employer name |
+| [OpenRouter](https://openrouter.ai/) running `MODEL_NAME` (default `google/gemini-2.5-flash`) | Email drafting (the research agents in `server/outreach.js` are reference code, not used by the hosted API) | `API_KEY` | Required for live email drafts. The provider receives the (synthetic) dossier's outreach strategy and the employer name |
 | The model vendor's own API | Alternative to OpenRouter | a vendor key (see `.env.example`) | Used only if no OpenRouter key is set |
 | [OpenSanctions](https://www.opensanctions.org/api/) | Sanctions, PEP and watchlist matching | `OPENSANCTIONS_API_KEY` | Strongly recommended. Check licence terms for commercial use |
 | [CourtListener](https://www.courtlistener.com/help/api/) (Free Law Project) | Public federal court dockets | `COURTLISTENER_TOKEN` (optional) | Token only raises rate limits |
@@ -172,7 +172,7 @@ API routes:
 |-------|--------------|
 | `GET /api/health` | `{"status":"ok", ...}` plus which mode email drafting is in |
 | `POST /api/outreach` | Streams a **synthetic** research dossier (`server/mock.js`). The public demo never researches real people: no web search, OpenSanctions, CourtListener or Firecrawl calls. The live research agent (`server/outreach.js`, `server/tools.js`) stays in the repository for reference but is not wired into the server |
-| `POST /api/email-draft` | The only live AI call: drafts the first-touch email through OpenRouter (`OUTREACH_MODEL`, default `google/gemini-2.5-flash`). Rate-limited per visitor with the shared AI Lodge engine (bucket `email`) |
+| `POST /api/email-draft` | The only live AI call: drafts the first-touch email through OpenRouter (`MODEL_NAME`, default `google/gemini-2.5-flash`). Rate-limited per visitor with the shared AI Lodge engine (bucket `email`) |
 
 ### Prerequisites
 
@@ -184,7 +184,7 @@ API routes:
 
 ```bash
 npm install                 # one runtime dependency: @upstash/redis (rate limiting)
-cp .env.example .env        # Windows PowerShell: Copy-Item .env.example .env, then fill in OPENROUTER_API_KEY
+cp .env.example .env        # Windows PowerShell: Copy-Item .env.example .env, then fill in API_KEY
 npm start                   # API on http://localhost:8080 (npm run start:mock: demo email drafts, no keys)
 ```
 
@@ -223,7 +223,7 @@ Makes two real model calls on a **fictional** dossier. Uses a little OpenRouter 
 gh secret set DOTENV --repo smubia-projects/ail-ay2627-s1-tzerey-origin < .env
 ```
 
-`DOTENV` needs `OPENROUTER_API_KEY`, `OUTREACH_MODEL`, `CORS_ORIGINS`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, plus the optional `RATE_LIMIT_EMAIL_MAX`, `RATE_LIMIT_WINDOW_SECONDS` and `OUTREACH_MOCK_SPEED` (see `.env.example`).
+`DOTENV` needs `API_KEY`, `MODEL_NAME`, `CORS_ORIGINS`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, plus the optional `RATE_LIMIT_EMAIL_MAX`, `RATE_LIMIT_WINDOW_SECONDS` and `OUTREACH_MOCK_SPEED` (see `.env.example`).
 
 **Frontend to Vercel.** Import the repository with the root directory left at the repository root. `vercel.json` sets the build command (`node tools/build-demo.js`), the output folder (`public`) and the security headers. Set one environment variable, `VITE_API_BASE`, to the Cloud Run URL. The Content-Security-Policy allows `connect-src https://*.run.app`; if the API ever moves to another domain, add it there.
 
@@ -237,7 +237,7 @@ When a visitor reaches the email-draft limit the page shows the AI Lodge call-to
 |---------|-----|
 | "Could not reach the email service" or research fails at once | The API is not running, `VITE_API_BASE` points to the wrong URL, or the page's origin is missing from `CORS_ORIGINS` |
 | `EADDRINUSE` / "Port 8080 is already in use" | Stop the other process or set `PORT` in `.env` (then rebuild the frontend with a matching `VITE_API_BASE`) |
-| Email drafting returns "not configured" | `OPENROUTER_API_KEY` is missing. Add it, or run `npm run start:mock` |
+| Email drafting returns "not configured" | `API_KEY` is missing. Add it, or run `npm run start:mock` |
 | OpenRouter 401 or 402 error | Key invalid or out of credit. Check it on openrouter.ai |
 | "Open in email app" does nothing | No default email application is configured. Use **Copy email** instead |
 | My file will not load | The dialog says why. The usual causes are single quotes instead of double quotes, a trailing expression or function in the data, or a date that is not `YYYY-MM-DD` |
