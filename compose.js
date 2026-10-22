@@ -34,9 +34,9 @@
     headline: "You've opened plenty of doors!",
     description: "This demo drafted {count} outreach emails for you. Want to build AI tools like Origin yourself?",
     programme: "AI Lodge",
-    programmeLink: "https://www.smubia.com/ai-lodge",
+    programmeLink: "https://www.smubia.com/ailodge",
     githubLink: "https://github.com/smubia-projects/ail-ay2627-s1-tzerey-origin",
-    showcaseLink: "https://www.smubia.com/showcase"
+    showcaseLink: "https://www.smubia.com/Projects"
   };
 
   function showRateLimitModal(count) {
