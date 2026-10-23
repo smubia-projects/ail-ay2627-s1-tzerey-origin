@@ -56,7 +56,7 @@ function makeFetch({ sanctionScore = 0.5 } = {}) {
       if (u.pathname === "/search/users") return json({ items: [{ login: "janeroe" }] });
       return json({ login: "janeroe", name: "Jane Roe", html_url: "https://github.com/janeroe", company: "@testco", bio: "Research", followers: 10, public_repos: 4 });
     }
-    if (u.host === "openrouter.ai") {
+    if (u.host === "api.apiyi.com") {
       assert.equal(init.headers.Authorization, `Bearer ${SECRETS.OPENROUTER_API_KEY}`);
       const body = JSON.parse(init.body);
       const wantsWeb = Array.isArray(body.plugins);
@@ -132,7 +132,7 @@ test("media coverage: press and podcasts have their own agents; there is no foru
   }
   assert.ok(!events.some((e) => /forum/i.test(`${e.id} ${e.label || ""}`)), "no forum step is emitted");
   assert.equal(dossier.forums, undefined, "the dossier has no forum section");
-  const modelRequests = calls.filter((c) => c.host === "openrouter.ai").map((c) => String(c.body)).join(" ");
+  const modelRequests = calls.filter((c) => c.host === "api.apiyi.com").map((c) => String(c.body)).join(" ");
   assert.ok(!/reddit|hacker news|news\.ycombinator|lesswrong|stack overflow/i.test(modelRequests), "no model request asks for forum content");
   // press and podcasts keep the ordinary rules: high/medium shown, low separated, hallucinated URL dropped
   assert.equal(dossier.press.findings.length, 1);

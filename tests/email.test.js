@@ -51,7 +51,7 @@ function stubModel(responses) {
   requests = [];
   let i = 0;
   global.fetch = async (url, init) => {
-    if (!String(url).includes("openrouter.ai")) throw new Error(`unexpected host ${url}`);
+    if (!String(url).includes("api.apiyi.com")) throw new Error(`unexpected host ${url}`);
     requests.push(JSON.parse(init.body));
     const content = typeof responses === "function" ? responses(i) : responses[Math.min(i, responses.length - 1)];
     i += 1;

@@ -43,7 +43,7 @@ test("email drafts are limited per IP (429 with detail.queries_used) and the kil
 
   const realFetch = global.fetch;
   global.fetch = async (url, init) => {
-    if (String(url).includes("openrouter.ai")) {
+    if (String(url).includes("api.apiyi.com")) {
       return { ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: JSON.stringify(GOOD) } }] }) };
     }
     return realFetch(url, init); // the Upstash client talks to the fake server above
