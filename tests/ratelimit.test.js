@@ -72,7 +72,7 @@ test("email drafts are limited per IP (429 with detail.queries_used) and the kil
   const limited = await post(payload);
   assert.equal(limited.status, 429);
   assert.equal(limited.json.detail.queries_used, 2);
-  assert.ok([...store.keys()].some((k) => k === "ratelimit::ail-ay2627-s1-tzerey-origin:email:203.0.113.7"), "counted per project, bucket and client IP");
+  assert.ok([...store.keys()].some((k) => /^ratelimit::ail-ay2627-s1-tzerey-origin:email:203\.0\.113\.7:\d+$/.test(k)), "counted per project, bucket, client IP and window");
 
   /* validation failures never reach the limiter */
   assert.equal((await post({ ...payload, employer: "" })).status, 422);
