@@ -1,21 +1,21 @@
 "use strict";
 
 /*
- * Language-model client, OpenRouter only (https://openrouter.ai/api/v1). The model comes from OUTREACH_MODEL.
+ * Language-model client, apiyi only (https://api.apiyi.com/v1). The model comes from OUTREACH_MODEL.
  * The optional `web` argument (OpenRouter's web plugin) is only used by the reference research agent in outreach.js,
  * which the hosted server does not call.
  */
 const { fetchJson, truncate, normalizeUrl } = require("./util");
 
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_MODEL = "google/gemini-2.5-flash";
+const openrouterUrl = () => `${((process.env.API_BASE_URL || process.env.OPENROUTER_BASE_URL)?.trim() || "https://api.apiyi.com/v1").replace(/\/+$/, "")}/chat/completions`;
+const DEFAULT_MODEL = "gemini-3.5-flash-lite";
 
 function llmConfig() {
-  if (!process.env.OPENROUTER_API_KEY) return null;
+  if (!(process.env.API_KEY || process.env.OPENROUTER_API_KEY)) return null;
   return {
     provider: "openrouter",
-    key: process.env.OPENROUTER_API_KEY,
-    model: process.env.OUTREACH_MODEL || DEFAULT_MODEL
+    key: (process.env.API_KEY || process.env.OPENROUTER_API_KEY),
+    model: (process.env.MODEL_NAME || process.env.OUTREACH_MODEL) || DEFAULT_MODEL
   };
 }
 
@@ -46,7 +46,7 @@ async function viaOpenRouter(cfg, { system, user, web, maxTokens, signal, temper
   };
   if (web) body.plugins = [{ id: "web", max_results: web.maxResults || 6 }];
   const json = await fetchJson(
-    OPENROUTER_URL,
+    openrouterUrl(),
     {
       method: "POST",
       headers: {
