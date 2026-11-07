@@ -32,7 +32,7 @@
     emoji: "🤝",
     accentColor: "#6366f1",
     headline: "You've opened plenty of doors!",
-    description: "This demo drafted {count} outreach emails for you. Want to build AI tools like Origin yourself?",
+    description: "Want to build AI that helps bankers start the right conversation with the right person? An ambitious idea and a handful of teammates is all it takes at AI Lodge to get a demo people can click through.",
     programme: "AI Lodge",
     programmeLink: "https://www.smubia.com/ailodge",
     githubLink: "https://github.com/smubia-projects/ail-ay2627-s1-tzerey-origin",
