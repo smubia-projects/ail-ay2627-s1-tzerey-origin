@@ -220,5 +220,22 @@
     </dialog>
 
     <dialog class="compose-dialog" id="composeDialog" aria-labelledby="composeTitle"></dialog>
+
+    <!-- AI Lodge rate-limit CTA: shown by compose.js when /api/email-draft returns 429. Text and links are set from RATE_LIMIT_CTA. -->
+    <dialog class="rl-modal" id="rlModal" aria-modal="true" aria-labelledby="rlHeadline" aria-describedby="rlDescription">
+      <div class="rl-banner">
+        <span class="rl-circle rl-circle-1" aria-hidden="true"></span>
+        <span class="rl-circle rl-circle-2" aria-hidden="true"></span>
+        <span class="rl-emoji" id="rlEmoji" aria-hidden="true"></span>
+        <h2 class="rl-headline" id="rlHeadline"></h2>
+        <p class="rl-description" id="rlDescription"></p>
+      </div>
+      <div class="rl-body">
+        <a class="rl-btn rl-btn-primary" id="rlJoin" href="#" target="_blank" rel="noopener noreferrer"><span id="rlJoinLabel">Join AI Lodge</span><span class="rl-arrow" aria-hidden="true">&rarr;</span></a>
+        <a class="rl-btn rl-btn-secondary" id="rlShowcase" href="#" target="_blank" rel="noopener noreferrer"><span>Explore other projects</span><span class="rl-arrow" aria-hidden="true">&rarr;</span></a>
+        <a class="rl-btn rl-btn-secondary" id="rlGithub" href="#" target="_blank" rel="noopener noreferrer"><span>View on GitHub</span><span class="rl-arrow" aria-hidden="true">&rarr;</span></a>
+        <button class="rl-dismiss" id="rlDismiss" type="button">Maybe later</button>
+      </div>
+    </dialog>
   </body>
 </html>

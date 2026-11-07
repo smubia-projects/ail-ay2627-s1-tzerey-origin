@@ -84,3 +84,13 @@ test("the page tells visitors when it is in demo mode, using the health endpoint
   assert.ok(html.indexOf('src="config.js"') < html.indexOf('src="dossier.js"'), "config.js loads before the API callers");
   assert.match(read("app.js"), /health\?\.mock/);
 });
+
+test("the email step handles the rate limiter: 429 opens the AI Lodge CTA, 503 shows a distinct paused notice", () => {
+  const html = read("app.html");
+  const compose = read("compose.js");
+  assert.match(html, /<dialog class="rl-modal" id="rlModal" aria-modal="true"/);
+  assert.match(compose, /res\.status === 429 && json\.detail\?\.queries_used !== undefined/);
+  assert.match(compose, /res\.status === 503\)[\s\S]*?renderPaused\(/);
+  assert.match(compose, /githubLink: "https:\/\/github\.com\/smubia-projects\/ail-ay2627-s1-tzerey-origin"/);
+  assert.match(compose, /programmeLink: "https:\/\/www\.smubia\.com\/ai-lodge"/);
+});

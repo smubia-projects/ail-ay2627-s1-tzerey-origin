@@ -1,6 +1,7 @@
 /*
- * "Start a conversation": collects the sender's sign-off details, asks the local server (Claude Sonnet) for a warm
+ * "Start a conversation": collects the sender's sign-off details, asks the API (an AI model via OpenRouter) for a warm
  * first-touch email based on the dossier's outreach strategy, lets the user review it, then opens the email app.
+ * The draft endpoint is rate-limited: a 429 shows the AI Lodge CTA modal, a 503 means the demo is paused.
  *
  * Privacy: the sender's name, pronouns, job title, email and phone are only used here in the browser to build the signature.
  * They are never sent to the server or the AI model. The request contains the dossier and the employer name only
@@ -19,11 +20,45 @@
   const oneLine = (value, max) => String(value ?? "").replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
 
   /* Transparency and opt-out line, appended below the signature of every email. It tells the recipient how they were found,
-   * how to stop hearing from you, and that you will erase their details (see "Data retention and deletion" in the README:
-   * npm run audit -- delete --name "..."). Keep it short: some email apps truncate very long mailto links.
+   * how to stop hearing from you, and that you will erase their details. Keep it short: some email apps truncate very long
+   * mailto links.
    * Edit this text if it is not accurate for how YOUR firm obtained the prospect's details. */
   const OPT_OUT_FOOTER = 'Why you\'re hearing from me: I found your name via public professional information. Not interested? Reply "no thanks" and I won\'t contact you again and will delete your details. Happy to share what I hold about you.';
   const OPT_OUT_PATTERN = /no thanks|unsubscribe|opt[- ]?out/i;
+
+  /* AI Lodge rate-limit CTA, shown when the email-draft limit is reached (HTTP 429). {count} comes from the server. */
+  const RATE_LIMIT_CTA = {
+    name: "Origin",
+    emoji: "🤝",
+    accentColor: "#6366f1",
+    headline: "You've opened plenty of doors!",
+    description: "This demo drafted {count} outreach emails for you. Want to build AI tools like Origin yourself?",
+    programme: "AI Lodge",
+    programmeLink: "https://www.smubia.com/ailodge",
+    githubLink: "https://github.com/smubia-projects/ail-ay2627-s1-tzerey-origin",
+    showcaseLink: "https://www.smubia.com/Projects"
+  };
+
+  function showRateLimitModal(count) {
+    const modal = document.querySelector("#rlModal");
+    if (!modal) return;
+    const set = (id, text) => { const el = modal.querySelector(id); if (el) el.textContent = text; };
+    modal.style.setProperty("--rl-accent", RATE_LIMIT_CTA.accentColor);
+    set("#rlEmoji", RATE_LIMIT_CTA.emoji);
+    set("#rlHeadline", RATE_LIMIT_CTA.headline);
+    set("#rlDescription", RATE_LIMIT_CTA.description.replace("{count}", String(count)));
+    set("#rlJoinLabel", `Join ${RATE_LIMIT_CTA.programme}`);
+    modal.querySelector("#rlJoin").href = RATE_LIMIT_CTA.programmeLink;
+    modal.querySelector("#rlGithub").href = RATE_LIMIT_CTA.githubLink;
+    modal.querySelector("#rlShowcase").href = RATE_LIMIT_CTA.showcaseLink;
+    if (!modal.dataset.wired) {
+      modal.dataset.wired = "1";
+      modal.querySelector("#rlDismiss").addEventListener("click", () => modal.close());
+      modal.addEventListener("click", (event) => { if (event.target === modal) modal.close(); }); // backdrop click
+    }
+    if (!modal.open) modal.showModal(); // a later modal dialog stacks above the compose dialog and traps focus
+    modal.querySelector("#rlJoin").focus();
+  }
 
   /* ---------------------------------------------------------------- pure helpers (also unit-tested) */
   function cleanDetails(raw) {
@@ -171,6 +206,26 @@
       </div>`;
   }
 
+  /* 429: the per-visitor draft limit was reached (the CTA modal opens on top of this). */
+  function renderLimited(count) {
+    dialog.innerHTML = `
+      ${closeButton}
+      <span class="d-kicker">Start a conversation</span>
+      <h2 id="composeTitle">Draft limit reached</h2>
+      <p class="compose-lede">This public demo allows ${esc(count)} AI email drafts per visitor, and you have used them all. Thanks for trying Origin.</p>
+      <div class="c-actions"><button class="c-btn" type="button" data-compose="close">Close</button></div>`;
+  }
+
+  /* 503: the demo was paused by its operators (rate-limit kill switch). Not the visitor's fault, so no CTA. */
+  function renderPaused(message) {
+    dialog.innerHTML = `
+      ${closeButton}
+      <span class="d-kicker">Start a conversation</span>
+      <h2 id="composeTitle">Demo temporarily paused</h2>
+      <p class="c-paused" role="status">${esc(message)}</p>
+      <div class="c-actions"><button class="c-btn" type="button" data-compose="close">Close</button></div>`;
+  }
+
   function renderPreview(draft, { to = "", notice = "" } = {}) {
     const body = assembleBody(draft.body, state.details);
     const basis = draft.referenced?.length
@@ -180,7 +235,7 @@
       ${closeButton}
       <span class="d-kicker">Start a conversation</span>
       <h2 id="composeTitle">Review your email</h2>
-      <p class="compose-lede">Drafted by ${esc(draft.model === "demo" ? "the demo generator" : "Claude Sonnet")}. ${basis} Read it through and change anything you like before sending.</p>
+      <p class="compose-lede">Drafted by ${esc(draft.model === "demo" ? "the demo generator" : `an AI model (${draft.model})`)}. ${basis} Read it through and change anything you like before sending.</p>
       <label class="c-field"><span>To <em>(optional, add their address if you have it)</em></span><input class="c-input" id="composeTo" type="email" value="${esc(to)}" placeholder="name@company.com" autocomplete="off" /></label>
       <label class="c-field"><span>Subject</span><input class="c-input" id="composeSubject" type="text" value="${esc(draft.subject)}" maxlength="140" /></label>
       <label class="c-field"><span>Message</span><textarea class="c-input c-textarea" id="composeBody" rows="15">${esc(body)}</textarea></label>
@@ -232,13 +287,23 @@
         signal
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || `The email service returned ${res.status}`);
       if (signal.aborted) return;
+      /* 429 with queries_used comes from the shared rate limiter; a 429 without it is the per-instance concurrency guard. */
+      if (res.status === 429 && json.detail?.queries_used !== undefined) {
+        renderLimited(json.detail.queries_used);
+        showRateLimitModal(json.detail.queries_used);
+        return;
+      }
+      if (res.status === 503) {
+        renderPaused(json.detail?.message || json.error || "This demo is temporarily paused. Check back soon.");
+        return;
+      }
+      if (!res.ok) throw new Error(json.error || `The email service returned ${res.status}`);
       state.draft = json;
       renderPreview(json);
     } catch (error) {
       if (signal.aborted) return;
-      renderError(error instanceof TypeError ? "Could not reach the local server. Make sure it is running (npm start)." : error.message);
+      renderError(error instanceof TypeError ? "Could not reach the email service. Check your connection and try again." : error.message);
     }
   }
 
