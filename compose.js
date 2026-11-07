@@ -9,6 +9,8 @@
 (() => {
   "use strict";
 
+  /* API base URL injected at build time (config.js, from VITE_API_BASE). */
+  const API_BASE = String(window.VITE_API_BASE || "http://localhost:8080").replace(/\/+$/, "");
   const STORE_KEY = "origin.sender.v1";
   const FIELD_MAX = { firstName: 60, lastName: 60, pronouns: 30, jobTitle: 120, employer: 80, email: 120, phone: 40 };
   const EMPLOYER_RE = /^[\p{L}\p{N} &.,'\u2019()\/+-]+$/u;
@@ -223,7 +225,7 @@
     const { signal } = state.controller;
     renderGenerating();
     try {
-      const res = await fetch("/api/email-draft", {
+      const res = await fetch(`${API_BASE}/api/email-draft`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Requested-With": "origin-app" },
         body: JSON.stringify({ dossier: state.dossier, variant: state.variant, acknowledgeCompliance: state.acknowledged, employer: state.details.employer }),
