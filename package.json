@@ -2,11 +2,10 @@
   "name": "origin-prospect-intelligence",
   "version": "1.0.0",
   "private": true,
-  "description": "Origin prospect intelligence app with a local, key-safe outreach research agent",
+  "description": "Origin prospect intelligence demo: static frontend plus a small API (synthetic research, live AI email drafts)",
   "scripts": {
     "start": "node --env-file-if-exists=.env server/server.js",
     "start:mock": "node --env-file-if-exists=.env server/server.js --mock",
-    "audit": "node --env-file-if-exists=.env tools/audit-log.js",
     "build:demo": "node tools/build-demo.js",
     "test": "node --test"
   },

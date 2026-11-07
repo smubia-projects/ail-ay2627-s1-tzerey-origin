@@ -209,11 +209,9 @@ function computeRisk({ sanctions, topics }) {
   return "clear";
 }
 
-/* Audit logging, retention and deletion live in ./audit.js (re-exported here for existing callers). */
-const { auditLog } = require("./audit");
 
 /* ------------------------------------------------------------------ main entry */
-async function runOutreach(subject, emit, { signal, ip = "local" } = {}) {
+async function runOutreach(subject, emit, { signal } = {}) {
   const started = Date.now();
   const stepStatus = {};
   const step = (id, label, status, detail = "") => {
@@ -352,17 +350,7 @@ async function runOutreach(subject, emit, { signal, ip = "local" } = {}) {
   };
   step("finalize", "Assemble dossier & apply privacy filters", "done", `${dossier.sources.length} sources`);
 
-  auditLog({
-    ts: dossier.meta.generatedAt,
-    ip,
-    subject: `${subject.name} @ ${subject.company}`,
-    risk,
-    mode: "live",
-    steps: stepStatus,
-    sources: dossier.sources.length,
-    seconds: dossier.meta.elapsedSeconds
-  });
   return dossier;
 }
 
-module.exports = { runOutreach, TOPICS, sanitizeText, isSensitive, computeRisk, auditLog };
+module.exports = { runOutreach, TOPICS, sanitizeText, isSensitive, computeRisk };

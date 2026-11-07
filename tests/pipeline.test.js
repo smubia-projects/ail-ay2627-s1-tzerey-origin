@@ -13,7 +13,6 @@ Object.assign(process.env, SECRETS);
 process.env.USPTO_ENABLED = "true"; // the USPTO path is off by default; most tests exercise it with a stubbed API
 delete process.env.FIRECRAWL_API_KEY;
 process.env.OUTREACH_MOCK_FAST = "1";
-process.env.OUTREACH_AUDIT_DIR = require("path").join(require("os").tmpdir(), "origin-test-audit");
 
 const { runOutreach, sanitizeText, isSensitive } = require("../server/outreach");
 const tools = require("../server/tools");

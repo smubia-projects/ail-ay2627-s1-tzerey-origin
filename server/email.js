@@ -177,7 +177,7 @@ async function draftEmail(dossier, { acknowledged = false, variant = 0, employer
 
   const context = extractContext(dossier, employerName);
   const cfg = llm.llmConfig();
-  if (!cfg) throw Object.assign(new Error("No language-model key configured (set OPENROUTER_API_KEY or ANTHROPIC_API_KEY)."), { status: 503 });
+  if (!cfg) throw Object.assign(new Error("No language-model key configured (set OPENROUTER_API_KEY)."), { status: 500 });
 
   let problems = [];
   for (let attempt = 0; attempt < 3; attempt += 1) {

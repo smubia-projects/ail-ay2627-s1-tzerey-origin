@@ -1,58 +1,42 @@
 "use strict";
 
 /*
- * Local server for Origin.
- *   GET  /*                  static app files (whitelisted names only)
- *   GET  /api/health         which integrations are configured (booleans only, never keys)
- *   POST /api/outreach       streams the outreach research dossier as NDJSON
- *   POST /api/email-draft    drafts a first-touch email from a dossier
+ * Origin API server (API-only: the static frontend is deployed separately on Vercel).
+ *   GET  /api/health         liveness plus which integrations are configured (booleans only, never keys)
+ *   POST /api/outreach       streams a SYNTHETIC research dossier as NDJSON (server/mock.js; no live lookups, no AI calls)
+ *   POST /api/email-draft    drafts a first-touch email from a dossier (the only live AI call, via OpenRouter, rate-limited)
+ * The public demo never researches real people: the live research agent (server/outreach.js, server/tools.js) is kept
+ * in the repository for reference but is not wired into this server.
  * API keys are read from the environment / .env on the server and are never sent to the browser.
- * Binds to localhost by default. Run with `npm start`, or `npm run start:mock` for a keyless demo.
+ * Cross-origin calls are accepted only from the origins listed in CORS_ORIGINS.
+ * Run with `npm start`, or `npm run start:mock` for keyless demo email drafts as well.
  */
 const http = require("http");
-const fs = require("fs");
-const path = require("path");
 const { llmConfig } = require("./llm");
-const { runOutreach, auditLog } = require("./outreach");
 const { runMock } = require("./mock");
 const { draftEmail, mockDraft, assertCanContact, cleanEmployer } = require("./email");
-const { firecrawlConfigured, usptoEnabled } = require("./tools");
-const { startRetentionJob } = require("./audit");
 
-const MOCK = process.argv.includes("--mock") || process.env.OUTREACH_MOCK === "1";
-const HOST = process.env.HOST || "127.0.0.1";
-const PORT = Number(process.env.PORT) || 8787;
-const ROOT = path.join(__dirname, "..");
-const MAX_CONCURRENT = 2;
+/* Research is always synthetic. This flag only switches email drafting to the keyless demo generator too. */
+const EMAIL_MOCK = process.argv.includes("--mock") || process.env.OUTREACH_MOCK === "1";
+const HOST = process.env.HOST || "0.0.0.0";
+const PORT = Number(process.env.PORT) || 8080;
+/* Frontend origins allowed to call the API (comma-separated). Defaults to the local static dev server. */
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || "http://localhost:5500,http://127.0.0.1:5500")
+  .split(",")
+  .map((origin) => origin.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
+const MAX_RESEARCH_RUNS = 10; // synthetic runs are cheap timers
+const MAX_DRAFTS = 2; // live model calls per instance
 const RUN_TIMEOUT_MS = 240000;
 let active = 0;
 let activeDrafts = 0;
 
-/* Only these files can be served. Everything else (including .env, server code and logs) is a 404. */
-const PUBLIC_FILES = {
-  "index.html": "text/html; charset=utf-8",
-  "app.html": "text/html; charset=utf-8",
-  "styles.css": "text/css; charset=utf-8",
-  "landing.css": "text/css; charset=utf-8",
-  "app.js": "text/javascript; charset=utf-8",
-  "landing.js": "text/javascript; charset=utf-8",
-  "equity-model.js": "text/javascript; charset=utf-8",
-  "dossier.js": "text/javascript; charset=utf-8",
-  "dossier-pdf.js": "text/javascript; charset=utf-8",
-  "compose.js": "text/javascript; charset=utf-8",
-  "data-loader.js": "text/javascript; charset=utf-8",
-  "data-upload.js": "text/javascript; charset=utf-8",
-  "templates/prospects-template.js": "text/javascript; charset=utf-8",
-  "templates/company-profiles-template.js": "text/javascript; charset=utf-8",
-  "templates/sample-data-pack.js": "text/javascript; charset=utf-8",
-  "vendor/jspdf.umd.min.js": "text/javascript; charset=utf-8"
-};
-
+/* API responses are JSON or NDJSON only, so the policy forbids loading anything. */
 const SECURITY_HEADERS = {
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
   "X-Frame-Options": "DENY",
-  "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'"
 };
 
 function sendJson(res, status, body) {
@@ -61,19 +45,11 @@ function sendJson(res, status, body) {
 }
 
 function health() {
-  const llm = llmConfig();
   return {
-    ok: true,
-    mock: MOCK,
-    tools: {
-      language_model: llm ? llm.provider : null,
-      opensanctions: Boolean(process.env.OPENSANCTIONS_API_KEY),
-      uspto: usptoEnabled() && Boolean(process.env.USPTO_API_KEY),
-      firecrawl: firecrawlConfigured(),
-      courtlistener: true,
-      openalex: true,
-      github: true
-    }
+    status: "ok",
+    mock: true, // research dossiers are always synthetic
+    research: "synthetic",
+    email: EMAIL_MOCK ? "demo" : llmConfig() ? "live" : "unconfigured"
   };
 }
 
@@ -101,19 +77,6 @@ function parseSubject(payload) {
 }
 
 async function readBody(req, limit = 20000) {
-  /* Some hosts (Vercel's Node runtime, for one) read and parse the body before the handler runs and expose it as req.body.
-   * Plain Node leaves req.body undefined, so the stream is read below. */
-  let pre;
-  try {
-    pre = req.body;
-  } catch {
-    throw Object.assign(new Error("Invalid JSON"), { status: 400 });
-  }
-  if (pre !== undefined && pre !== null) {
-    const text = Buffer.isBuffer(pre) ? pre.toString("utf8") : typeof pre === "string" ? pre : JSON.stringify(pre);
-    if (Buffer.byteLength(text) > limit) throw Object.assign(new Error("Payload too large"), { status: 413 });
-    return text;
-  }
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -124,20 +87,33 @@ async function readBody(req, limit = 20000) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/* The request's Origin must be this same site. The scheme is ignored on purpose: behind HTTPS hosting the browser's Origin
- * is https://... while this process only sees the Host header. */
-function sameSite(origin, host) {
-  try {
-    return new URL(origin).host.toLowerCase() === String(host || "").toLowerCase();
-  } catch {
-    return false;
+const allowedOrigin = (origin) => CORS_ORIGINS.includes(String(origin || "").replace(/\/+$/, ""));
+
+/* Lets the configured frontend origins read API responses. Set before any response is written. */
+function applyCors(req, res) {
+  const origin = req.headers.origin;
+  if (origin && allowedOrigin(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
   }
 }
 
-/* Shared request guard for the POST APIs: same-origin only, and only from the app's own fetch calls. */
+/* CORS preflight for the POST APIs (they send Content-Type: application/json and X-Requested-With). */
+function handlePreflight(req, res) {
+  if (!allowedOrigin(req.headers.origin)) return sendJson(res, 403, { error: "Origin not allowed" });
+  res.writeHead(204, {
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, X-Requested-With",
+    "Access-Control-Max-Age": "600",
+    ...SECURITY_HEADERS
+  });
+  return res.end();
+}
+
+/* Shared request guard for the POST APIs: only from an allowed frontend origin, and only from the app's own fetch calls. */
 function guardApiRequest(req, res) {
   const origin = req.headers.origin;
-  if (origin && !sameSite(origin, req.headers.host)) {
+  if (origin && !allowedOrigin(origin)) {
     sendJson(res, 403, { error: "Cross-origin requests are not allowed" });
     return false;
   }
@@ -150,7 +126,7 @@ function guardApiRequest(req, res) {
 
 async function handleOutreach(req, res) {
   if (!guardApiRequest(req, res)) return;
-  if (active >= MAX_CONCURRENT) return sendJson(res, 429, { error: "Too many research runs in progress. Try again shortly." });
+  if (active >= MAX_RESEARCH_RUNS) return sendJson(res, 429, { error: "Too many research runs in progress. Try again shortly." });
 
   let subject;
   try {
@@ -159,9 +135,6 @@ async function handleOutreach(req, res) {
     return sendJson(res, error.status || 400, { error: error.message || "Invalid JSON" });
   }
   if (!subject) return sendJson(res, 422, { error: "A name, company and title are required" });
-  if (!MOCK && !llmConfig() && !process.env.OPENSANCTIONS_API_KEY) {
-    return sendJson(res, 503, { error: "No API keys are configured. Add them to .env (see .env.example) or run `npm run start:mock` for a demo." });
-  }
 
   active += 1;
   const controller = new AbortController();
@@ -170,8 +143,7 @@ async function handleOutreach(req, res) {
   res.writeHead(200, { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no", ...SECURITY_HEADERS });
   const emit = (event) => { if (!res.writableEnded) res.write(`${JSON.stringify(event)}\n`); };
   try {
-    const run = MOCK ? runMock : runOutreach;
-    const dossier = await run(subject, emit, { signal: controller.signal, ip: req.socket.remoteAddress });
+    const dossier = await runMock(subject, emit, { signal: controller.signal });
     emit({ type: "result", dossier });
   } catch (error) {
     emit({ type: "error", message: controller.signal.aborted ? "The research run was cancelled or timed out." : error.message });
@@ -186,7 +158,7 @@ async function handleOutreach(req, res) {
  * Receives the dossier and the sender's employer name only; the sender's personal details never reach this endpoint. */
 async function handleEmailDraft(req, res) {
   if (!guardApiRequest(req, res)) return;
-  if (activeDrafts >= MAX_CONCURRENT) return sendJson(res, 429, { error: "Too many drafts in progress. Try again shortly." });
+  if (activeDrafts >= MAX_DRAFTS) return sendJson(res, 429, { error: "Too many drafts in progress. Try again shortly." });
 
   let payload;
   try {
@@ -201,8 +173,9 @@ async function handleEmailDraft(req, res) {
   const employer = cleanEmployer(payload.employer);
   if (!employer) return sendJson(res, 422, { error: "A valid employer name is required (letters, numbers and basic punctuation, up to 80 characters)." });
 
-  if (!MOCK && !llmConfig()) {
-    return sendJson(res, 503, { error: "No language-model key is configured. Add OPENROUTER_API_KEY to .env (see .env.example) or run `npm run start:mock` for a demo." });
+  /* 500, not 503: 503 is reserved for the rate-limit kill switch ("demo paused"). */
+  if (!EMAIL_MOCK && !llmConfig()) {
+    return sendJson(res, 500, { error: "Email drafting is not configured on this server (OPENROUTER_API_KEY is missing)." });
   }
   activeDrafts += 1;
   const controller = new AbortController();
@@ -210,18 +183,7 @@ async function handleEmailDraft(req, res) {
   res.on("close", () => controller.abort());
   try {
     assertCanContact(dossier, acknowledged);
-    const draft = MOCK ? mockDraft(dossier, { variant, employer }) : await draftEmail(dossier, { acknowledged, variant, employer, signal: controller.signal });
-    auditLog({
-      ts: new Date().toISOString(),
-      type: "email_draft",
-      ip: req.socket.remoteAddress,
-      subject: `${String(dossier.subject.name).slice(0, 80)} @ ${String(dossier.subject.company || "").slice(0, 60)}`,
-      risk: dossier.complianceRisk,
-      acknowledged,
-      variant,
-      mode: MOCK ? "mock" : "live",
-      model: draft.model
-    });
+    const draft = EMAIL_MOCK ? mockDraft(dossier, { variant, employer }) : await draftEmail(dossier, { acknowledged, variant, employer, signal: controller.signal });
     return sendJson(res, 200, draft);
   } catch (error) {
     const status = error.status || (controller.signal.aborted ? 504 : 502);
@@ -232,31 +194,17 @@ async function handleEmailDraft(req, res) {
   }
 }
 
-function serveStatic(req, res, pathname) {
-  const name = pathname === "/" ? "index.html" : pathname.replace(/^\//, "");
-  const type = Object.hasOwn(PUBLIC_FILES, name) ? PUBLIC_FILES[name] : null;
-  if (!type) {
-    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", ...SECURITY_HEADERS });
-    return res.end("Not found");
-  }
-  fs.readFile(path.join(ROOT, name), (error, data) => {
-    if (error) {
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", ...SECURITY_HEADERS });
-      return res.end("Not found");
-    }
-    res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-cache", ...SECURITY_HEADERS });
-    res.end(data);
-  });
-}
-
-/* Routes one request. Used by the local server below and by the hosted demo's api/ functions. */
+/* Routes one request. */
 function route(req, res) {
   const { pathname } = new URL(req.url, "http://localhost");
+  applyCors(req, res);
+  if (!pathname.startsWith("/api/")) return sendJson(res, 404, { error: "Not found" });
+  if (req.method === "OPTIONS") return handlePreflight(req, res);
   if (pathname === "/api/health" && req.method === "GET") return sendJson(res, 200, health());
   if (pathname === "/api/outreach" && req.method === "POST") return handleOutreach(req, res);
   if (pathname === "/api/email-draft" && req.method === "POST") return handleEmailDraft(req, res);
-  if (req.method === "GET" || req.method === "HEAD") return serveStatic(req, res, pathname);
-  return sendJson(res, 405, { error: "Method not allowed" });
+  if (["/api/health", "/api/outreach", "/api/email-draft"].includes(pathname)) return sendJson(res, 405, { error: "Method not allowed" });
+  return sendJson(res, 404, { error: "Not found" });
 }
 
 const server = http.createServer(route);
@@ -267,14 +215,8 @@ if (require.main === module) {
     process.exit(1);
   });
   server.listen(PORT, HOST, () => {
-    const h = health();
-    console.log(`Origin is running at http://${HOST}:${PORT}/app.html${MOCK ? "  (DEMO MODE: synthetic data)" : ""}`);
-    console.log(`Tools: ${Object.entries(h.tools).map(([k, v]) => `${k}=${v ? "on" : "off"}`).join(", ")}`);
-    const retention = startRetentionJob();
-    console.log(retention.days
-      ? `Audit log retention: ${retention.days} days (purged ${retention.removed} old entr${retention.removed === 1 ? "y" : "ies"}, ${retention.kept} kept). Manage it with: npm run audit -- list`
-      : "Audit log retention: OFF (AUDIT_RETENTION_DAYS=0). Entries are kept until you delete them: npm run audit -- delete-all --yes");
+    console.log(`Origin API listening on http://${HOST}:${PORT} (research: synthetic, email drafts: ${health().email}). Allowed origins: ${CORS_ORIGINS.join(", ") || "(none)"}`);
   });
 }
 
-module.exports = { server, route, health, parseSubject, readBody, PUBLIC_FILES, SECURITY_HEADERS };
+module.exports = { server, route, health, parseSubject, readBody, SECURITY_HEADERS, CORS_ORIGINS };
