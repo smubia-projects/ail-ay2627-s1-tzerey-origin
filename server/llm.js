@@ -8,7 +8,7 @@
 const { fetchJson, truncate, normalizeUrl } = require("./util");
 
 const openrouterUrl = () => `${((process.env.API_BASE_URL || process.env.OPENROUTER_BASE_URL)?.trim() || "https://api.apiyi.com/v1").replace(/\/+$/, "")}/chat/completions`;
-const DEFAULT_MODEL = "gemini-3.5-flash-lite";
+const DEFAULT_MODEL = "deepseek-v4-1-flash-260910";
 
 function llmConfig() {
   if (!(process.env.API_KEY || process.env.OPENROUTER_API_KEY)) return null;
@@ -45,6 +45,8 @@ async function viaOpenRouter(cfg, { system, user, web, maxTokens, signal, temper
     temperature: temperature ?? 0.2
   };
   if (web) body.plugins = [{ id: "web", max_results: web.maxResults || 6 }];
+  // DeepSeek thinks before answering unless told not to; the email draft has a time budget.
+  if (/deepseek/i.test(cfg.model)) body.reasoning_effort = "none";
   const json = await fetchJson(
     openrouterUrl(),
     {

@@ -103,7 +103,7 @@ flowchart LR
 |---|-----------|------------------|-------|----------|
 | 1 | **Web research agents** (8 topics: profile, press, writing, podcasts, social, video, legal/adverse media, business interests) | Searches the live web (or reads Firecrawl pages) and returns structured findings, each with a source URL, a date and a match-confidence with reasons | `MODEL_NAME` via OpenRouter's web-search plugin. Reference code only: not wired into the hosted API | Temperature 0.2, JSON output |
 | 2 | **Synthesis agent** | Reads only the verified evidence and writes the executive summary, profile summary, career highlights, an outreach strategy (angle, conversation starters, channel, timing, things to avoid) and a list of data gaps | `MODEL_NAME`. Reference code only: not wired into the hosted API | Temperature 0.2, JSON output |
-| 3 | **Email drafting agent** | Writes a short, warm invitation from the outreach strategy and a few high-confidence public items, mentioning the sender's employer by name | `MODEL_NAME` via apiyi (default `gemini-3.5-flash-lite`). The only AI call in the hosted demo | Temperature 0.7, JSON output, up to 3 attempts |
+| 3 | **Email drafting agent** | Writes a short, warm invitation from the outreach strategy and a few high-confidence public items, mentioning the sender's employer by name | `MODEL_NAME` via apiyi (default `deepseek-v4-1-flash-260910`). The only AI call in the hosted demo | Temperature 0.7, JSON output, up to 3 attempts |
 
 Override the model with `MODEL_NAME`.
 
@@ -131,7 +131,7 @@ Override the model with `MODEL_NAME`.
 
 | Service | Used for | Key needed | Notes |
 |---------|----------|-----------|-------|
-| [apiyi](https://apiyi.com) running `MODEL_NAME` (default `gemini-3.5-flash-lite`) | Email drafting (the research agents in `server/outreach.js` are reference code, not used by the hosted API) | `API_KEY` | Required for live email drafts. The provider receives the (synthetic) dossier's outreach strategy and the employer name |
+| [apiyi](https://apiyi.com) running `MODEL_NAME` (default `deepseek-v4-1-flash-260910`) | Email drafting (the research agents in `server/outreach.js` are reference code, not used by the hosted API) | `API_KEY` | Required for live email drafts. The provider receives the (synthetic) dossier's outreach strategy and the employer name |
 | The model vendor's own API | Alternative to OpenRouter | a vendor key (see `.env.example`) | Used only if no OpenRouter key is set |
 | [OpenSanctions](https://www.opensanctions.org/api/) | Sanctions, PEP and watchlist matching | `OPENSANCTIONS_API_KEY` | Strongly recommended. Check licence terms for commercial use |
 | [CourtListener](https://www.courtlistener.com/help/api/) (Free Law Project) | Public federal court dockets | `COURTLISTENER_TOKEN` (optional) | Token only raises rate limits |
@@ -172,7 +172,7 @@ API routes:
 |-------|--------------|
 | `GET /api/health` | `{"status":"ok", ...}` plus which mode email drafting is in |
 | `POST /api/outreach` | Streams a **synthetic** research dossier (`server/mock.js`). The public demo never researches real people: no web search, OpenSanctions, CourtListener or Firecrawl calls. The live research agent (`server/outreach.js`, `server/tools.js`) stays in the repository for reference but is not wired into the server |
-| `POST /api/email-draft` | The only live AI call: drafts the first-touch email through apiyi (`MODEL_NAME`, default `gemini-3.5-flash-lite`). Rate-limited per visitor with the shared AI Lodge engine (bucket `email`) |
+| `POST /api/email-draft` | The only live AI call: drafts the first-touch email through apiyi (`MODEL_NAME`, default `deepseek-v4-1-flash-260910`). Rate-limited per visitor with the shared AI Lodge engine (bucket `email`) |
 
 ### Prerequisites
 
